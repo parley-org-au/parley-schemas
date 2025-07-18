@@ -1,5 +1,5 @@
 # parley-schemas/buf.yaml
-version: v1
+version: v2
 name: buf.build/parley-org-au/parley-schemas
 build:
   roots:
