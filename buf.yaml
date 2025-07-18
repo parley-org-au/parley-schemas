@@ -1,12 +1,11 @@
 # parley-schemas/buf.yaml
 version: v2
-name: buf.build/parley-org-au/parley-schemas
-build:
-  roots:
-    - proto
-breaking:
-  use:
-    - FILE
+modules:
+  - path: proto
+    name: buf.build/parley-org-au/parley-schemas  # optional
 lint:
   use:
     - DEFAULT
+breaking:
+  use:
+    - FILE
