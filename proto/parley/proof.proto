@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package parley.proof;
+
+option go_package   = "github.com/parleyid/parley-schemas/go/parley/proof;proof";
+option java_package = "id.parley.schemas.parley.proof";
+option java_outer_classname = "ParleyProofProto";
+
+import "google/protobuf/timestamp.proto";
+import "parley/common.proto";
+
+/*------------------------------------------------------------
+ *  PARAMETERS
+ *-----------------------------------------------------------*/
+
+/** Copied from the challenge so verifier can sanity‑check bounds. */
+message AgeRange {
+  uint32 min_age = 1;   // Inclusive lower bound
+  uint32 max_age = 2;   // 0 = no upper bound
+}
+
+/*------------------------------------------------------------
+ *  ZERO‑KNOWLEDGE AGE PROOF
+ *  (wallet → verifier‑core)
+ *-----------------------------------------------------------*/
+message AgeProof {
+  /*----------- Pseudonymous credential -----------*/
+
+  // Hash of the issuer signature – serves as the credential’s primary key.
+  bytes credential_id   = 1;
+
+  // Pedersen commitment to the user’s full date‑of‑birth expressed as
+  // “days since Unix epoch”.  Revealed to no‑one, proved in range.
+  bytes dob_commitment  = 2;
+
+  // Ed25519 public key of the wallet; allows linking multiple proofs
+  // from the same device if the user opts‑in.
+  bytes user_public_key = 3;
+
+  /*----------- Signatures & ZK‑Proof -----------*/
+
+  // Issuer RSA/EdDSA signature over dob_commitment.
+  bytes credential_signature = 4;
+
+  // Bulletproof showing dob_commitment ≤ cutoff date (≥ min_age yrs).
+  bytes range_proof          = 5;
+
+  // Wallet’s signature over fields 1‑5 & 10‑12 to prove key possession.
+  bytes wallet_signature     = 6;
+
+  /*----------- Meta -----------*/
+
+  // When the wallet built the proof.  Allows freshness checks.
+  google.protobuf.Timestamp  proof_time = 7;
+
+  // Wire‑format version negotiated in challenge.supported_versions.
+  parley.common.ProofVersion version    = 8;
+
+  // Hash algorithm used inside range_proof and wallet_signature.
+  parley.common.AlgoId       hash_algo  = 9;
+
+  /*----------- Challenge binding -----------*/
+
+  AgeRange asserted_age = 10;  // Copied from AgeChallenge.{min,max}_age
+  bytes    nonce        = 11;  // Copied from AgeChallenge.nonce
+  string   challenge_id = 12;  // Copied from AgeChallenge.challenge_id
+}
+
+/*------------------------------------------------------------
+ *  CREDENTIAL REVOCATION LIST
+ *  (issuer / CA → verifier)
+ *-----------------------------------------------------------*/
+message RevocationList {
+  // List of revoked credential_ids, each exactly 32 bytes.
+  repeated bytes              revoked_ids = 1;
+
+  // Issuer signature over the concatenated IDs plus timestamp.
+  bytes                       signature   = 2;
+
+  // When the list was produced – used for staleness checks.
+  google.protobuf.Timestamp   timestamp   = 3;
+}

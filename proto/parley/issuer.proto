@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package parley.issuer;
+
+option go_package   = "github.com/parleyid/parley-schemas/go/parley/issuer;issuer";
+option java_package = "id.parley.schemas.parley.issuer";
+option java_outer_classname = "ParleyIssuerProto";
+
+import "google/protobuf/timestamp.proto";
+import "parley/common.proto";
+
+/*------------------------------------------------------------
+ *  ISSUER KEY MATERIAL
+ *-----------------------------------------------------------*/
+
+/** One active RSA public key used to sign credential commitments. */
+message IssuerKey {
+  string  key_id     = 1;  // JWKS "kid"
+  bytes   rsa_n      = 2;  // Modulus   (big‑endian)
+  bytes   rsa_e      = 3;  // Exponent  (big‑endian)
+
+  google.protobuf.Timestamp valid_from = 4;
+  google.protobuf.Timestamp valid_to   = 5;
+
+  // OCSP / CRL endpoints for revocation of this key.
+  repeated string crl_urls = 6;
+}
+
+/** JWKS wrapper so wallets can fetch rotation sets at once. */
+message IssuerKeys {
+  repeated IssuerKey keys = 1;
+}
+
+/*------------------------------------------------------------
+ *  ISSUER METADATA (public)
+ *-----------------------------------------------------------*/
+message Issuer {
+  string  issuer_id   = 1;  // DID / URL identifying the government body
+  bytes   jwks        = 2;  // Full JWKS JSON (compressed if desired)
+
+  google.protobuf.Timestamp valid_from = 3;
+  google.protobuf.Timestamp valid_to   = 4;
+
+  repeated string crl_urls = 5;
+}
+
+/*------------------------------------------------------------
+ *  AGE CREDENTIAL
+ *  (issuer → wallet)
+ *-----------------------------------------------------------*/
+message AgeCredential {
+  bytes   credential_id        = 1; // SHA‑256(credential_signature)
+  bytes   credential_signature = 2; // RSA signature over dob_commitment
+
+  // Commitment to the user’s DOB; matches AgeProof.dob_commitment.
+  bytes   dob_commitment       = 3; // 32 bytes
+
+  google.protobuf.Timestamp issued_at = 4;
+  string  issuer_id   = 5;
+  parley.common.AlgoId hash_algo = 6;
+}
+
+/*------------------------------------------------------------
+ *  ISSUANCE HANDSHAKE
+ *  (wallet ⇆ officer workstation)
+ *-----------------------------------------------------------*/
+message CredentialRequest {
+  string  request_id         = 1; // Client‑generated UUID
+  bytes   blinded_commit     = 2; // Blinded Pedersen commit of DOB
+
+  // Full date‑of‑birth asserted by user; officer eyeballs the ID card to
+  // confirm.  Sent only in clear between wallet and officer.
+  google.protobuf.Timestamp claimed_birth_date = 3;
+
+  // Wallet’s Ed25519 public key so officer can encrypt any response.
+  bytes   wallet_pubkey      = 4;
+
+  // Random nonce so the officer can’t replay a request for another user.
+  bytes   nonce              = 5;
+
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message CredentialResponse {
+  string  request_id      = 1; // Mirrors CredentialRequest.request_id
+  bytes   blind_signature = 2; // Officer’s blind signature
+  bytes   credential_id   = 3; // Deterministic ID for later revocation
+  string  officer_id      = 4; // Badge / employee ID
+  google.protobuf.Timestamp issued_at = 5;
+}
+
+/*------------------------------------------------------------
+ *  AUDIT TRAIL (real‑time feed)
+ *-----------------------------------------------------------*/
+message IssuanceAuditLog {
+  string  station_id    = 1; // Kiosk / branch where issued
+  string  officer_id    = 2;
+  bytes   credential_id = 3;
+  google.protobuf.Timestamp issued_at = 4;
+
+  // How the officer verified the applicant (in‑person or kiosk).
+  parley.common.VerificationMethod method = 5;
+}

@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package parley.common;
+
+option go_package   = "github.com/parleyid/parley-schemas/go/parley/common;common";
+option java_package = "id.parley.schemas.parley.common";
+option java_outer_classname = "ParleyCommonProto";
+
+import "google/protobuf/any.proto";
+
+/*------------------------------------------------------------
+ *  ALGORITHMS & VERSIONS
+ *-----------------------------------------------------------*/
+
+/** Cryptographic digests supported across Parley. */
+enum AlgoId {
+  ALGO_UNSPECIFIED = 0;   // Invalid / reserved
+  SHA_256          = 1;
+  SHA_512          = 2;
+  BLAKE2B_256      = 3;
+}
+
+/** Wire‑format versioning for proofs & challenges. */
+enum ProofVersion {
+  PROOF_VERSION_UNSPECIFIED = 0;
+  V1                        = 1;  // July 2025 – first public release
+}
+
+/*------------------------------------------------------------
+ *  TRANSPORT DETAILS
+ *-----------------------------------------------------------*/
+
+/** How the relying‑party intends to deliver the challenge blob. */
+enum Channel {
+  CHANNEL_UNSPECIFIED = 0;  // Interpreted as QR_CODE for back‑compat
+  QR_CODE             = 1;  // Two‑device flow (desktop site + phone)
+  APP_LINK            = 2;  // Universal/App Link (same device)
+  LOOPBACK_HTTP       = 3;  // RFC 8252 loop‑back localhost server
+  NEARBY_SHARE        = 4;  // Future BLE/Nearby hybrid
+}
+
+/** Transformation applied in PKCE (RFC 7636). */
+enum PkceMethod {
+  PKCE_METHOD_UNSPECIFIED = 0;  // Treat as PLAIN
+  PLAIN                   = 1;  // code_challenge == code_verifier
+  S256                    = 2;  // SHA‑256 + BASE64URL
+}
+
+/*------------------------------------------------------------
+ *  GENERIC ERROR STRUCT
+ *-----------------------------------------------------------*/
+
+message Error {
+  uint32              code    = 1; // App‑defined
+  string              message = 2; // Human description
+  google.protobuf.Any details = 3; // Nested service‑specific payload
+}
+
+/*------------------------------------------------------------
+ *  ISSUANCE CONTEXT
+ *-----------------------------------------------------------*/
+
+/** How an officer verified the user during credential issuance. */
+enum VerificationMethod {
+  VERIFICATION_METHOD_UNSPECIFIED = 0;
+  OFFICER_IN_PERSON               = 1;  // Face‑to‑face check
+  SELF_SERVICE_KIOSK              = 2;  // Automated booth
+}
