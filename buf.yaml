@@ -1,5 +1,9 @@
 # parley-schemas/buf.yaml
 version: v1
+name: buf.build/parley-org-au/parley-schemas
+build:
+  roots:
+    - proto
 breaking:
   use:
     - FILE
