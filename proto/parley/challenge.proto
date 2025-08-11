@@ -12,6 +12,7 @@ import "parley/common.proto";
 /*------------------------------------------------------------
  *  AGE‑GATE CHALLENGE
  *  (relying‑party → wallet, via agegate‑js)
+ *  Routes: POST /v1/challenge, GET /v1/challenge/{sid}
  *-----------------------------------------------------------*/
 message AgeChallenge {
   /*----------- Identification -----------*/
@@ -28,7 +29,7 @@ message AgeChallenge {
   // a range proof that DOB ≤ (reference_time − min_age years).
   uint32  min_age      = 2;                 // Inclusive
 
-  // Optional upper bound (rare).  Zero means “no upper limit”.
+  // Optional upper bound (rare).  Zero means "no upper limit".
   // Wallet ignores 0; otherwise enforces
   // (reference_time − max_age years) ≤ DOB.
   uint32  max_age      = 3;                 // 0 = ∞
@@ -44,9 +45,10 @@ message AgeChallenge {
 
   /*----------- Anti‑replay / binding -----*/
 
-  // 32 bytes of CSPRNG entropy to bind the proof to this challenge.
+  // 32 bytes of CSPRNG entropy to bind the proof to this challenge.
   // Copied verbatim into AgeProof.nonce and checked by verifier‑core.
   bytes   nonce  = 6;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   // RP origin that will receive the result.  Wallet displays it and
   // rejects mismatches to prevent phishing.
@@ -54,14 +56,21 @@ message AgeChallenge {
 
   /*----------- Authenticity --------------*/
 
-  // RP signature (ECDSA/Ed25519) over fields 1‑7.  Verified first by
-  // wallet‑sdk, then again by verifier‑core.
+  // RP signature (Ed25519) over all security-relevant fields.
+  // Includes: challenge_id, min_age, max_age, issued_at, expires_at,
+  // nonce, origin, origin_hash, aud_app, callback_uri
   bytes   site_signature = 8;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Key ID from /v1/jwks for signature verification
+  string  site_key_id = 17;
+  
+  // Signature algorithm (must be ED25519 or RSA_PSS_SHA256)
+  parley.common.SignatureAlgo site_sig_algo = 18;
 
   /*----------- Negotiation ---------------*/
 
-  // Versions of the proof format the RP is willing to accept, newest
-  // first.  Wallet picks the highest version it supports.
+  // Version of the proof format - V1 only, no legacy support
   repeated parley.common.ProofVersion supported_versions = 9;
 
   // Hash algorithm used in the range‑proof and signatures.
@@ -69,33 +78,79 @@ message AgeChallenge {
 
   /*----------- Same‑device enhancements (all optional) -----------*/
 
-  // How the RP intends to deliver the challenge (QR, App Link, …).
+  // How the RP intends to deliver the challenge (QR, App Link, …).
   parley.common.Channel    channel               = 11; // Default = QR_CODE
 
   // Deep‑link the wallet should invoke after successful proof so the
-  // RP’s native app can pick up the result.
+  // RP's native app can pick up the result. Must be asset-linked.
   string                   callback_uri          = 12;
 
-  // Android package name or iOS bundle ID of the RP.  Used to harden
-  // deep‑linking on mobile.
-  string                   app_package           = 13;
+  // DEPRECATED: Use aud_app instead
+  // reserved 13;
+  // reserved "app_package";
+  string                   app_package           = 13;  // Will be removed in next version
 
   // PKCE support for same‑device: BASE64URL(SHA‑256(code_verifier)) if
   // `code_challenge_method` is S256, otherwise plaintext.
   string                   code_challenge        = 14;
 
-  parley.common.PkceMethod code_challenge_method = 15; // PLAIN | S256
+  parley.common.PkceMethod code_challenge_method = 15; // PLAIN | S256
 
   /*----------- Reference‑time ------------*/
 
-  // Optional authoritative “now” chosen by the verifier.  Wallet uses
+  // Optional authoritative "now" chosen by the verifier.  Wallet uses
   // this (instead of device wall‑clock) to compute the legal age, which
   // avoids failures on phones with badly‑set clocks.
   google.protobuf.Timestamp reference_time = 16;
+
+  /*----------- App Identity & Attestation (Issue I-11) -----------*/
+  
+  // Audience app identifier for app-to-app flows.
+  // Format: "android:com.example.app#<sha256-cert>" or "ios:com.example.app#<team-id>"
+  string aud_app = 19;
+  
+  // Hash of the origin for additional binding (SHA-256)
+  bytes origin_hash = 20;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // App attestation provided by the requesting app (optional but recommended)
+  parley.common.AppAttestation attestation = 21;
 }
 
 /*------------------------------------------------------------
- *  WALLET → VERIFIER‑API  (POST /proof)
+ *  CREATE CHALLENGE REQUEST
+ *  (RP → verifier-api POST /v1/challenge)
+ *-----------------------------------------------------------*/
+message CreateChallengeRequest {
+  // Web origin or app identifier requesting the challenge
+  string origin = 1;
+  
+  // Minimum age requirement
+  uint32 min_age = 2;
+  
+  // Optional maximum age (0 = no limit)
+  uint32 max_age = 3;
+  
+  // Optional app identifier for mobile flows
+  string aud_app = 4;
+  
+  // Optional callback URI for deep-linking
+  string callback_uri = 5;
+  
+  // Optional app attestation for verification
+  parley.common.AppAttestation attestation = 6;
+  
+  // Optional PKCE challenge for same-device flows
+  string code_challenge = 7;
+  parley.common.PkceMethod code_challenge_method = 8;
+  
+  // Optional custom expiry duration in seconds (default: 300)
+  uint32 expires_in = 9;
+}
+
+/*------------------------------------------------------------
+ *  WALLET → VERIFIER‑API  (POST /v1/verify)
+ *  Note: sid now in body, not path
  *-----------------------------------------------------------*/
 message ProofSubmission {
   // Mirrors AgeChallenge.challenge_id; lets the Worker find the stored
@@ -104,10 +159,15 @@ message ProofSubmission {
 
   // Binary‑protobuf‐encoded AgeProof (BASE64URL in JSON wrapper).
   bytes  age_proof    = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   // Present only when the RP set a PKCE code_challenge.  Verified by
   // hashing and comparing to that challenge.
   string code_verifier = 3;
+  
+  // Session ID for the verification request (optional). If provided it MUST equal the path parameter :sid on /v1/verify/:sid.
+
+  string session_id = 4;
 }
 
 /*------------------------------------------------------------
@@ -117,16 +177,20 @@ message VerificationResult {
   // True when verifier‑core validated the proof end‑to‑end.
   bool                        is_valid          = 1;
 
-  // Machine‑readable error code (0 = OK).  Values are project‑specific.
+  // Machine‑readable error code (0 = OK).  Values are project‑specific.
   uint32                      error_code        = 2;
 
-  // Human‑readable message for analytics / UX (“Proof expired”, …).
+  // Human‑readable message for analytics / UX ("Proof expired", …).
   string                      message           = 3;
 
   // Credential the proof was based on.  Echoed so the RP can key‑off an
   // allow‑list or run its own revocation lookup if desired.
   bytes                       credential_id     = 4;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   // When the verification was completed on the server.
   google.protobuf.Timestamp   verification_time = 5;
+  
+  // The app that was verified (if app attestation was provided)
+  string                      verified_app      = 6;
 }

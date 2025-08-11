@@ -14,90 +14,394 @@ import "parley/common.proto";
  *-----------------------------------------------------------*/
 
 /** One active RSA public key used to sign credential commitments. */
+// DEPRECATED: prefer Issuer.jwks for key material; IssuerKey kept for compatibility.
 message IssuerKey {
   string  key_id     = 1;  // JWKS "kid"
   bytes   rsa_n      = 2;  // Modulus   (big‑endian)
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
   bytes   rsa_e      = 3;  // Exponent  (big‑endian)
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   google.protobuf.Timestamp valid_from = 4;
   google.protobuf.Timestamp valid_to   = 5;
 
   // OCSP / CRL endpoints for revocation of this key.
   repeated string crl_urls = 6;
+  
+  // Algorithm this key uses (RSA_PSS_SHA256 only for RSA keys)
+  parley.common.SignatureAlgo algo = 7;
 }
 
 /** JWKS wrapper so wallets can fetch rotation sets at once. */
 message IssuerKeys {
-  repeated IssuerKey keys = 1;
+  repeated// DEPRECATED: prefer JWKS
+ IssuerKey keys = 1;
+  
+  // Signature over the keys for authenticity
+  bytes signature = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // When this key set was published
+  google.protobuf.Timestamp published_at = 3;
 }
 
 /*------------------------------------------------------------
  *  ISSUER METADATA (public)
  *-----------------------------------------------------------*/
 message Issuer {
-  string  issuer_id   = 1;  // DID / URL identifying the government body
+  string  issuer_id   = 1;  // DID / URL identifying the issuer
   bytes   jwks        = 2;  // Full JWKS JSON (compressed if desired)
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   google.protobuf.Timestamp valid_from = 3;
   google.protobuf.Timestamp valid_to   = 4;
 
   repeated string crl_urls = 5;
+  
+  // Supported credential schema versions
+  repeated uint32 supported_schema_versions = 6;
+  
+  // Type of issuer (GOVERNMENT, BANK, etc.)
+  parley.common.IssuerType issuer_type = 7;
+  
+  // Human-readable name (e.g., "Commonwealth Bank of Australia")
+  string display_name = 8;
+  
+  // Issuer's logo URL for wallet UI
+  string logo_url = 9;
+  
+  // API endpoint for remote issuance (banks/third parties)
+  string issuance_endpoint = 10;
+  
+  // Required authentication methods for this issuer
+  repeated string auth_methods = 11;  // ["oauth2", "saml", etc.]
+  
+  // Regulatory certifications this issuer holds
+  repeated string certifications = 12;  // ["ISO27001", "SOC2", etc.]
+  
+  // Whether this issuer requires user consent recording
+  bool requires_consent_signature = 13;
+}
+
+/**
+ * Registry of approved issuers.
+ * Served from https://static.zerokp.id/issuers.json
+ */
+message IssuerRegistry {
+  repeated Issuer issuers = 1;
+  
+  // Signature over the registry for authenticity
+  bytes signature = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // When this registry was published
+  google.protobuf.Timestamp published_at = 3;
+  
+  // Next expected update
+  google.protobuf.Timestamp next_update = 4;
+  
+  // Version for cache invalidation
+  uint64 version = 5;
 }
 
 /*------------------------------------------------------------
- *  AGE CREDENTIAL
+ *  AGE CREDENTIAL with Partially-Blind Signature
  *  (issuer → wallet)
  *-----------------------------------------------------------*/
 message AgeCredential {
   bytes   credential_id        = 1; // SHA‑256(credential_signature)
-  bytes   credential_signature = 2; // RSA signature over dob_commitment
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Partially-blind RSA-PSS signature over the commitment and metadata
+  bytes   credential_signature = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
-  // Commitment to the user’s DOB; matches AgeProof.dob_commitment.
-  bytes   dob_commitment       = 3; // 32 bytes
+  // Pedersen commitment to the user's DOB (g^dob * h^r)
+  bytes   dob_commitment       = 3; // 32 bytes
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Hash of the commitment for binding (H(dob_commitment))
+  bytes   commitment_hash      = 4; // 32 bytes
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Issuer key ID that created this credential
+  string  issuer_key_id        = 5;
 
-  google.protobuf.Timestamp issued_at = 4;
-  string  issuer_id   = 5;
-  parley.common.AlgoId hash_algo = 6;
+  google.protobuf.Timestamp issued_at = 6;
+  
+  // Full issuer identification
+  string  issuer_id   = 7;        // e.g., "gov:dmv:nsw" or "bank:cba:au"
+  parley.common.IssuerType issuer_type = 8;
+  
+  parley.common.AlgoId hash_algo = 9;
+  
+  // Schema version for this credential format
+  uint32  schema_version = 10;
+  
+  // The partially-blind metadata that was included in the signature
+  parley.common.PartialBlindMetadata metadata = 11;
+  
+  // How this credential was verified
+  parley.common.VerificationMethod verification_method = 12;
+  
+  // Optional: bank verification proof if issued by bank
+  BankVerificationProof bank_verification = 13;
+  
+  // Credential validity period (banks might issue shorter-lived credentials)
+  google.protobuf.Timestamp valid_until = 14;
 }
 
 /*------------------------------------------------------------
- *  ISSUANCE HANDSHAKE
- *  (wallet ⇆ officer workstation)
+ *  ISSUANCE REQUEST with NIZK (Issue I-13)
+ *  (wallet → officer workstation OR bank API)
  *-----------------------------------------------------------*/
-message CredentialRequest {
+message IssuanceRequest {
   string  request_id         = 1; // Client‑generated UUID
-  bytes   blinded_commit     = 2; // Blinded Pedersen commit of DOB
+  
+  // The claimed date of birth in clear text for verification
+  // Format: "YYYY-MM-DD" (e.g., "2007-03-15")
+  string  claimed_dob_yyyy_mm_dd = 2;
+  
+  // Pedersen commitment to the DOB: C = g^dob * h^r
+  bytes   dob_commitment     = 3;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // NIZK proof that claimed_dob matches the commitment
+  parley.common.NizkEquality nizk_proof = 4;
+  
+  // Partially-blind metadata to be bound into the signature
+  parley.common.PartialBlindMetadata metadata = 5;
+  
+  // Blinded message for RSA partially-blind signature
+  bytes   blinded_message    = 6;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
-  // Full date‑of‑birth asserted by user; officer eyeballs the ID card to
-  // confirm.  Sent only in clear between wallet and officer.
-  google.protobuf.Timestamp claimed_birth_date = 3;
+  // Wallet's Ed25519 public key for response encryption/verification
+  bytes   wallet_pubkey      = 7;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
-  // Wallet’s Ed25519 public key so officer can encrypt any response.
-  bytes   wallet_pubkey      = 4;
+  // Random nonce to prevent replay attacks
+  bytes   nonce              = 8;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
-  // Random nonce so the officer can’t replay a request for another user.
-  bytes   nonce              = 5;
-
-  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp created_at = 9;
+  
+  // Optional: officer station/kiosk identifier (for in-person)
+  string  station_id = 10;
+  
+  // For remote issuance (banks/third parties)
+  parley.common.IssuerAuthToken auth_token = 11;
+  
+  // User's consent to share DOB with this issuer
+  bytes   user_consent_signature = 12;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Preferred issuer if multiple are available
+  string  preferred_issuer_id = 13;
 }
 
-message CredentialResponse {
-  string  request_id      = 1; // Mirrors CredentialRequest.request_id
-  bytes   blind_signature = 2; // Officer’s blind signature
-  bytes   credential_id   = 3; // Deterministic ID for later revocation
-  string  officer_id      = 4; // Badge / employee ID
-  google.protobuf.Timestamp issued_at = 5;
+/*------------------------------------------------------------
+ *  REMOTE ISSUANCE FLOW (Banks/Third Parties)
+ *-----------------------------------------------------------*/
+
+/**
+ * Step 1: Wallet initiates remote issuance with a bank
+ * POST to bank's issuance_endpoint/v1/issuance/init
+ */
+message RemoteIssuanceInit {
+  string wallet_pubkey_b64 = 1;  // Wallet's public key
+  string requested_issuer_id = 2; // Which bank/issuer
+  
+  // Optional: if user already has session with bank app
+  string existing_session_token = 3;
+}
+
+/**
+ * Step 2: Bank responds with authentication requirements
+ */
+message RemoteIssuanceChallenge {
+  string session_id = 1;          // Issuance session identifier
+  string auth_redirect_url = 2;   // OAuth2/SAML redirect URL
+  
+  // QR code data if bank app authentication is preferred
+  bytes  app_auth_qr_data = 3;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Required authentication method
+  string required_auth_method = 4; // "oauth2", "bank_app", etc.
+  
+  // Expires after this time
+  google.protobuf.Timestamp expires_at = 5;
+  
+  // Bank's issuance terms user must accept
+  string terms_url = 6;
+  
+  // Nonce for this session
+  bytes session_nonce = 7;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+}
+
+/**
+ * Step 3: After user authenticates with bank, wallet completes issuance
+ * POST to bank's issuance_endpoint/v1/issuance/complete
+ */
+message RemoteIssuanceComplete {
+  string session_id = 1;           // From RemoteIssuanceChallenge
+  
+  // The actual issuance request with NIZK
+  IssuanceRequest issuance_request = 2;
+  
+  // Proof of authentication completion
+  oneof auth_proof {
+    string oauth2_code = 3;       // OAuth2 authorization code
+    string saml_response = 4;     // SAML response
+    bytes app_auth_signature = 5; // Signature from bank's mobile app
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  }
+  
+  // User's explicit consent to issuance
+  bool user_consented = 6;
+  google.protobuf.Timestamp consent_timestamp = 7;
+}
+
+/*------------------------------------------------------------
+ *  ISSUANCE RESPONSE (Issue I-14)
+ *  (officer workstation OR bank API → wallet)
+ *-----------------------------------------------------------*/
+message IssuanceResponse {
+  string  request_id      = 1; // Mirrors IssuanceRequest.request_id
+  
+  // Partially-blind RSA-PSS signature over commitment + metadata
+  bytes   blind_signature = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Deterministic credential ID for tracking/revocation
+  bytes   credential_id   = 3;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Officer who performed the verification (if in-person)
+  string  officer_id      = 4;
+  
+  // Key ID used for signing
+  string  issuer_key_id   = 5;
+  
+  google.protobuf.Timestamp issued_at = 6;
+  
+  // The metadata that was signed (for verification)
+  parley.common.PartialBlindMetadata signed_metadata = 7;
+  
+  // Signature over the response for authenticity
+  bytes   response_signature = 8;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Issuer identification
+  string  issuer_id = 9;           // e.g., "bank:cba:au"
+  parley.common.IssuerType issuer_type = 10;
+  
+  // How the DOB was verified
+  parley.common.VerificationMethod verification_method = 11;
+  
+  // For banks: proof they verified against their KYC records
+  BankVerificationProof bank_verification = 12;
+}
+
+/**
+ * Proof that a bank verified the DOB against their KYC records
+ */
+message BankVerificationProof {
+  // Hash of the bank's internal KYC record (privacy-preserving)
+  bytes kyc_record_hash = 1;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // When the KYC was last updated
+  google.protobuf.Timestamp kyc_last_verified = 2;
+  
+  // Bank's signature over the verification
+  bytes bank_signature = 3;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Regulatory compliance attestation
+  string compliance_ref = 4;  // e.g., "AML-CTF-2024-12345"
+  
+  // Whether this used document verification or existing records
+  enum VerificationSource {
+    VERIFICATION_SOURCE_UNSPECIFIED = 0;
+    EXISTING_KYC_RECORDS = 1;      // Used existing verified records
+    NEW_DOCUMENT_VERIFICATION = 2;  // Verified new documents
+    CREDIT_BUREAU = 3;              // Verified via credit bureau
+  }
+  VerificationSource source = 5;
 }
 
 /*------------------------------------------------------------
  *  AUDIT TRAIL (real‑time feed)
  *-----------------------------------------------------------*/
 message IssuanceAuditLog {
-  string  station_id    = 1; // Kiosk / branch where issued
-  string  officer_id    = 2;
+  string  station_id    = 1; // Kiosk/branch (gov) or system ID (bank)
+  string  officer_id    = 2; // Officer ID or "SYSTEM" for automated
   bytes   credential_id = 3;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
   google.protobuf.Timestamp issued_at = 4;
 
-  // How the officer verified the applicant (in‑person or kiosk).
+  // How the applicant was verified
   parley.common.VerificationMethod method = 5;
+  
+  // Commitment hash (not the raw commitment) for privacy
+  bytes   commitment_hash = 6;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Schema version used
+  uint32  schema_version = 7;
+  
+  // Full issuer identification
+  string  issuer_id = 8;
+  parley.common.IssuerType issuer_type = 9;
+  
+  // Issuer key ID used
+  string  issuer_key_id = 10;
+  
+  // For remote issuance: authentication method used
+  string  auth_method = 11;  // "oauth2", "bank_app", etc.
+  
+  // Compliance/regulatory reference if required
+  string  compliance_ref = 12;
+  
+  // Whether user provided explicit consent
+  bool    user_consented = 13;
+  
+  // IP address hash for security monitoring (not PII)
+  bytes   ip_hash = 14;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+}
+
+/*------------------------------------------------------------
+ *  CREDENTIAL REVOCATION
+ *-----------------------------------------------------------*/
+message RevocationEntry {
+  bytes   credential_id = 1;  // The credential being revoked
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  google.protobuf.Timestamp revoked_at = 2;
+  string  reason = 3;  // Human-readable reason
+  uint32  reason_code = 4;  // Machine-readable code
+}
+
+message CredentialRevocationList {
+  // List of revoked credentials with metadata
+  repeated RevocationEntry entries = 1;
+  
+  // Issuer signature over the entire list
+  bytes signature = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // When this CRL was generated
+  google.protobuf.Timestamp generated_at = 3;
+  
+  // Next expected update time
+  google.protobuf.Timestamp next_update = 4;
+  
+  // CRL sequence number for ordering
+  uint64 sequence = 5;
+  
+  // Issuer key ID that signed this CRL
+  string issuer_key_id = 6;
 }

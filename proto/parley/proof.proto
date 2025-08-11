@@ -20,40 +20,47 @@ message AgeRange {
 }
 
 /*------------------------------------------------------------
- *  ZERO‑KNOWLEDGE AGE PROOF
- *  (wallet → verifier‑core)
+ *  ZERO‑KNOWLEDGE AGE PROOF with Partial-Blind Binding
+ *  (wallet → verifier‑core via /v1/verify)
  *-----------------------------------------------------------*/
 message AgeProof {
   /*----------- Pseudonymous credential -----------*/
 
-  // Hash of the issuer signature – serves as the credential’s primary key.
+  // Hash of the issuer signature – serves as the credential's primary key.
   bytes credential_id   = 1;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
-  // Pedersen commitment to the user’s full date‑of‑birth expressed as
-  // “days since Unix epoch”.  Revealed to no‑one, proved in range.
+  // Pedersen commitment to the user's full date‑of‑birth expressed as
+  // "days since Unix epoch".  Revealed to no‑one, proved in range.
   bytes dob_commitment  = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   // Ed25519 public key of the wallet; allows linking multiple proofs
   // from the same device if the user opts‑in.
   bytes user_public_key = 3;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   /*----------- Signatures & ZK‑Proof -----------*/
 
-  // Issuer RSA/EdDSA signature over dob_commitment.
+  // Issuer RSA-PSS signature over dob_commitment + metadata (partially-blind).
   bytes credential_signature = 4;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
-  // Bulletproof showing dob_commitment ≤ cutoff date (≥ min_age yrs).
+  // Bulletproof showing dob_commitment encodes age ≥ min_age years.
+  // Transcript includes issuer_key_id and commitment for binding.
   bytes range_proof          = 5;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
-  // Wallet’s signature over fields 1‑5 & 10‑12 to prove key possession.
+  // Wallet's Ed25519 signature over all fields to prove key possession.
   bytes wallet_signature     = 6;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   /*----------- Meta -----------*/
 
   // When the wallet built the proof.  Allows freshness checks.
   google.protobuf.Timestamp  proof_time = 7;
 
-  // Wire‑format version negotiated in challenge.supported_versions.
+  // Wire‑format version - V1 only, no legacy support.
   parley.common.ProofVersion version    = 8;
 
   // Hash algorithm used inside range_proof and wallet_signature.
@@ -63,20 +70,106 @@ message AgeProof {
 
   AgeRange asserted_age = 10;  // Copied from AgeChallenge.{min,max}_age
   bytes    nonce        = 11;  // Copied from AgeChallenge.nonce
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
   string   challenge_id = 12;  // Copied from AgeChallenge.challenge_id
+
+  /*----------- Partial-blind binding (Issues I-12, I-14) -----------*/
+  
+  // Hash of the Pedersen commitment for verification
+  bytes   commitment_hash = 13;  // H(dob_commitment) - 32 bytes
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Issuer key ID that signed this credential
+  string  issuer_key_id   = 14;
+  
+  // Schema version of the credential
+  uint32  schema_version  = 15;
+  
+  // The partial-blind metadata that was signed with the credential
+  parley.common.PartialBlindMetadata metadata = 16;
+  
+  /*----------- Issuer information -----------*/
+  
+  // Which entity issued this credential
+  string  issuer_id = 17;  // e.g., "gov:dmv:nsw" or "bank:cba:au"
+  
+  // Type of issuer for policy decisions
+  parley.common.IssuerType issuer_type = 18;
+  
+  // How the issuer verified the DOB
+  parley.common.VerificationMethod verification_method = 19;
+  
+  // When the credential expires (if set by issuer)
+  google.protobuf.Timestamp credential_expiry = 20;
 }
 
 /*------------------------------------------------------------
  *  CREDENTIAL REVOCATION LIST
- *  (issuer / CA → verifier)
+ *  (issuer / CA → verifier via https://static.zerokp.id/crl.json)
  *-----------------------------------------------------------*/
 message RevocationList {
-  // List of revoked credential_ids, each exactly 32 bytes.
+  // List of revoked credential_ids, each exactly 32 bytes.
   repeated bytes              revoked_ids = 1;
 
   // Issuer signature over the concatenated IDs plus timestamp.
   bytes                       signature   = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   // When the list was produced – used for staleness checks.
   google.protobuf.Timestamp   timestamp   = 3;
+  
+  // Next expected update
+  google.protobuf.Timestamp   next_update = 4;
+  
+  // Issuer key ID that signed this list
+  string                      issuer_key_id = 5;
+  
+  // CRL sequence number
+  uint64                      sequence = 6;
+}
+
+/*------------------------------------------------------------
+ *  PROOF VERIFICATION REQUEST
+ *  (Internal structure for verifier-core)
+ *-----------------------------------------------------------*/
+message ProofVerificationRequest {
+  // The proof to verify
+  AgeProof proof = 1;
+  
+  // The challenge it's responding to
+  bytes challenge = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Current JWKS snapshot (no implicit network calls)
+  bytes jwks_snapshot = 3;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Current CRL snapshot (no implicit network calls)  
+  bytes crl_snapshot = 4;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Maximum acceptable clock skew in seconds
+  uint32 max_clock_skew = 5;
+  
+  // Current time for verification (if not using system time)
+  google.protobuf.Timestamp verification_time = 6;
+}
+
+/*------------------------------------------------------------
+ *  PROOF VERIFICATION RESPONSE
+ *  (Internal structure from verifier-core)
+ *-----------------------------------------------------------*/
+message ProofVerificationResponse {
+  bool   is_valid = 1;
+  string error    = 2;  // Empty if valid
+  
+  // Detailed validation results
+  bool credential_signature_valid = 3;
+  bool range_proof_valid         = 4;
+  bool wallet_signature_valid    = 5;
+  bool commitment_binding_valid  = 6;
+  bool not_revoked              = 7;
+  bool within_time_bounds       = 8;
+  bool challenge_binding_valid  = 9;
+  bool issuer_key_valid        = 10;
 }

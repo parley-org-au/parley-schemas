@@ -12,7 +12,11 @@ import "google/protobuf/any.proto";
  *  ALGORITHMS & VERSIONS
  *-----------------------------------------------------------*/
 
-/** Cryptographic digests supported across Parley. */
+/** 
+ * Cryptographic digests supported across Parley.
+ * IMPORTANT: Only Ed25519 and RSA-PSS signatures allowed.
+ * "none" and RSA-PKCS1v1.5 are explicitly forbidden for security.
+ */
 enum AlgoId {
   ALGO_UNSPECIFIED = 0;   // Invalid / reserved
   SHA_256          = 1;
@@ -20,10 +24,22 @@ enum AlgoId {
   BLAKE2B_256      = 3;
 }
 
-/** Wire‑format versioning for proofs & challenges. */
+/** 
+ * Signature algorithms allowed in the system.
+ * SECURITY: RSA-PKCS1v1.5 and "none" are explicitly forbidden.
+ */
+enum SignatureAlgo {
+  SIGNATURE_ALGO_UNSPECIFIED = 0;
+  ED25519                    = 1;  // EdDSA with Ed25519
+  RSA_PSS_SHA256             = 2;  // RSA-PSS with SHA-256
+  // reserved 3 to 10;  // Legacy algorithms explicitly not supported
+}
+
+/** Wire‑format versioning for proofs & challenges - V1 only, no legacy support. */
 enum ProofVersion {
   PROOF_VERSION_UNSPECIFIED = 0;
-  V1                        = 1;  // July 2025 – first public release
+  V1                        = 1;  // August 2025 – first production release
+  // No other versions - this is v1 only, no legacy support
 }
 
 /*------------------------------------------------------------
@@ -35,15 +51,62 @@ enum Channel {
   CHANNEL_UNSPECIFIED = 0;  // Interpreted as QR_CODE for back‑compat
   QR_CODE             = 1;  // Two‑device flow (desktop site + phone)
   APP_LINK            = 2;  // Universal/App Link (same device)
-  LOOPBACK_HTTP       = 3;  // RFC 8252 loop‑back localhost server
+  LOOPBACK_HTTP       = 3;  // RFC 8252 loop‑back localhost server
   NEARBY_SHARE        = 4;  // Future BLE/Nearby hybrid
 }
 
-/** Transformation applied in PKCE (RFC 7636). */
+/** Transformation applied in PKCE (RFC 7636). */
 enum PkceMethod {
   PKCE_METHOD_UNSPECIFIED = 0;  // Treat as PLAIN
   PLAIN                   = 1;  // code_challenge == code_verifier
   S256                    = 2;  // SHA‑256 + BASE64URL
+}
+
+/*------------------------------------------------------------
+ *  SECURITY ENHANCEMENTS
+ *-----------------------------------------------------------*/
+
+/**
+ * App attestation token from mobile platforms.
+ * Used to verify the requesting app's identity and integrity.
+ */
+message AppAttestation {
+  oneof token {
+    string android_play_integrity_jws = 1;  // Play Integrity API signed token
+    string ios_app_attest_jws         = 2;  // DeviceCheck App Attest token
+  }
+  
+  // Nonce that should match hash of challenge draft for freshness
+  bytes nonce = 3;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // When the attestation was generated
+  int64 timestamp_ms = 4;
+}
+
+/**
+ * Metadata for partially-blind signatures.
+ * This data is publicly bound into the signature but doesn't reveal the commitment.
+ */
+message PartialBlindMetadata {
+  bytes  commitment_hash = 1;  // H(Pedersen commitment) - 32 bytes
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  string issuer_key_id   = 2;  // Key ID from JWKS
+  uint32 schema_version  = 3;  // Protocol version for this credential
+}
+
+/**
+ * NIZK equality proof showing that the displayed DOB equals the committed DOB.
+ * Uses Schnorr-based proof for Pedersen commitments.
+ */
+message NizkEquality {
+  bytes  proof          = 1;  // The actual proof bytes (c || z format for Schnorr)
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  string alg            = 2;  // Algorithm identifier (e.g., "pedersen-schnorr-sha256")
+  bytes  commitment     = 3;  // The Pedersen commitment C = g^m * h^r
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  bytes  challenge_hash = 4;  // Fiat-Shamir challenge for non-interactive proof
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 }
 
 /*------------------------------------------------------------
@@ -65,4 +128,42 @@ enum VerificationMethod {
   VERIFICATION_METHOD_UNSPECIFIED = 0;
   OFFICER_IN_PERSON               = 1;  // Face‑to‑face check
   SELF_SERVICE_KIOSK              = 2;  // Automated booth
+  REMOTE_VIDEO_VERIFICATION        = 3;  // Video call verification
+  BANK_KYC_RECORDS                = 4;  // Bank's existing KYC verification
+  TRUSTED_THIRD_PARTY_RECORDS     = 5;  // Other approved entity's records
+}
+
+/**
+ * Types of entities allowed to issue age credentials.
+ */
+enum IssuerType {
+  ISSUER_TYPE_UNSPECIFIED  = 0;
+  GOVERNMENT               = 1;  // Government offices/DMV
+  BANK                     = 2;  // Licensed banks with KYC
+  TELCO                    = 3;  // Telecom providers with ID verification
+  POST_OFFICE              = 4;  // Postal services with ID verification
+  TRUSTED_THIRD_PARTY      = 5;  // Other certified entities
+}
+
+/**
+ * Authentication token from a trusted issuer's system.
+ * Used when banks/third parties issue credentials remotely.
+ */
+message IssuerAuthToken {
+  oneof token {
+    string oauth2_jwt       = 1;  // OAuth2/OIDC token from bank
+    string saml_assertion   = 2;  // SAML assertion
+    string proprietary_jwt  = 3;  // Issuer-specific signed JWT
+  }
+  
+  string issuer_id = 4;          // Registered issuer identifier
+  int64 issued_at_ms = 5;        // Token issuance time
+  int64 expires_at_ms = 6;       // Token expiration
+  
+  // User identifier at the issuer (encrypted/hashed)
+  string subject_id = 7;
+  
+  // Proof that user authorized this issuance
+  bytes user_consent_signature = 8;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 }
