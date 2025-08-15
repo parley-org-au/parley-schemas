@@ -13,29 +13,34 @@ import "parley/common.proto";
  *  ISSUER KEY MATERIAL
  *-----------------------------------------------------------*/
 
-/** One active RSA public key used to sign credential commitments. */
-// DEPRECATED: prefer Issuer.jwks for key material; IssuerKey kept for compatibility.
+/** 
+ * One active RSA public key used to sign credential commitments.
+ * DEPRECATED: prefer Issuer.jwks for key material; IssuerKey kept for compatibility.
+ */
 message IssuerKey {
   string  key_id     = 1;  // JWKS "kid"
-  bytes   rsa_n      = 2;  // Modulus   (big‑endian)
+  bytes   rsa_n      = 2;  // Modulus (big-endian)
   // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  bytes   rsa_e      = 3;  // Exponent  (big‑endian)
+  bytes   rsa_e      = 3;  // Exponent (big-endian)
   // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   google.protobuf.Timestamp valid_from = 4;
   google.protobuf.Timestamp valid_to   = 5;
 
-  // OCSP / CRL endpoints for revocation of this key.
+  // OCSP / CRL endpoints for revocation of this key
   repeated string crl_urls = 6;
   
   // Algorithm this key uses (RSA_PSS_SHA256 only for RSA keys)
   parley.common.SignatureAlgo algo = 7;
 }
 
-/** JWKS wrapper so wallets can fetch rotation sets at once. */
+/** 
+ * JWKS wrapper so wallets can fetch rotation sets at once.
+ * DEPRECATED: Use Issuer.jwks field instead.
+ */
 message IssuerKeys {
-  repeated// DEPRECATED: prefer JWKS
- IssuerKey keys = 1;
+  // DEPRECATED: prefer JWKS
+  repeated IssuerKey keys = 1;
   
   // Signature over the keys for authenticity
   bytes signature = 2;
@@ -50,7 +55,12 @@ message IssuerKeys {
  *-----------------------------------------------------------*/
 message Issuer {
   string  issuer_id   = 1;  // DID / URL identifying the issuer
-  bytes   jwks        = 2;  // Full JWKS JSON (compressed if desired)
+  
+  // JWK Set JSON (UTF-8), optionally gzip-compressed
+  // Format: standard JWK Set with keys array containing:
+  // - Ed25519: {"kty":"OKP","crv":"Ed25519","x":"<b64url>","kid":"<string>","alg":"EdDSA"}
+  // - RSA-PSS: {"kty":"RSA","n":"<b64url>","e":"<b64url>","kid":"<string>","alg":"PS256"}
+  bytes   jwks        = 2;
   // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
   google.protobuf.Timestamp valid_from = 3;
@@ -109,7 +119,7 @@ message IssuerRegistry {
  *  (issuer → wallet)
  *-----------------------------------------------------------*/
 message AgeCredential {
-  bytes   credential_id        = 1; // SHA‑256(credential_signature)
+  bytes   credential_id        = 1; // SHA-256(credential_signature)
   // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
   
   // Partially-blind RSA-PSS signature over the commitment and metadata
@@ -152,11 +162,11 @@ message AgeCredential {
 }
 
 /*------------------------------------------------------------
- *  ISSUANCE REQUEST with NIZK (Issue I-13)
+ *  ISSUANCE REQUEST with NIZK
  *  (wallet → officer workstation OR bank API)
  *-----------------------------------------------------------*/
 message IssuanceRequest {
-  string  request_id         = 1; // Client‑generated UUID
+  string  request_id         = 1; // Client-generated UUID
   
   // The claimed date of birth in clear text for verification
   // Format: "YYYY-MM-DD" (e.g., "2007-03-15")
@@ -256,7 +266,7 @@ message RemoteIssuanceComplete {
     string oauth2_code = 3;       // OAuth2 authorization code
     string saml_response = 4;     // SAML response
     bytes app_auth_signature = 5; // Signature from bank's mobile app
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+    // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
   }
   
   // User's explicit consent to issuance
@@ -265,7 +275,7 @@ message RemoteIssuanceComplete {
 }
 
 /*------------------------------------------------------------
- *  ISSUANCE RESPONSE (Issue I-14)
+ *  ISSUANCE RESPONSE
  *  (officer workstation OR bank API → wallet)
  *-----------------------------------------------------------*/
 message IssuanceResponse {
@@ -334,7 +344,7 @@ message BankVerificationProof {
 }
 
 /*------------------------------------------------------------
- *  AUDIT TRAIL (real‑time feed)
+ *  AUDIT TRAIL (real-time feed)
  *-----------------------------------------------------------*/
 message IssuanceAuditLog {
   string  station_id    = 1; // Kiosk/branch (gov) or system ID (bank)
@@ -377,6 +387,10 @@ message IssuanceAuditLog {
 /*------------------------------------------------------------
  *  CREDENTIAL REVOCATION
  *-----------------------------------------------------------*/
+
+/**
+ * Single revocation entry with metadata.
+ */
 message RevocationEntry {
   bytes   credential_id = 1;  // The credential being revoked
   // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
@@ -385,6 +399,10 @@ message RevocationEntry {
   uint32  reason_code = 4;  // Machine-readable code
 }
 
+/**
+ * Canonical CRL JSON format for verification.
+ * This is the format consumed by verifier-core.
+ */
 message CredentialRevocationList {
   // List of revoked credentials with metadata
   repeated RevocationEntry entries = 1;
