@@ -10,97 +10,139 @@ import "google/protobuf/timestamp.proto";
 import "parley/common.proto";
 
 /*------------------------------------------------------------
- *  PARAMETERS
+ *  ZERO-KNOWLEDGE AGE PROOF with Partial-Blind Binding
+ *  (wallet → verifier-core via /v1/verify)
  *-----------------------------------------------------------*/
 
-/** Copied from the challenge so verifier can sanity‑check bounds. */
-message AgeRange {
-  uint32 min_age = 1;   // Inclusive lower bound
-  uint32 max_age = 2;   // 0 = no upper bound
-}
-
-/*------------------------------------------------------------
- *  ZERO‑KNOWLEDGE AGE PROOF with Partial-Blind Binding
- *  (wallet → verifier‑core via /v1/verify)
- *-----------------------------------------------------------*/
+/**
+ * Age proof demonstrating age eligibility without revealing exact date of birth.
+ * 
+ * Wallet Binding Signature (WALLET_BINDING_V2):
+ * The wallet_signature is computed over the following canonical message:
+ * 
+ * WALLET_BINDING_V2 := SHA-256(
+ *   "PARLEY_WALLET_BINDING_V2" ||
+ *   LE32(len(credential_id))      || credential_id ||
+ *   LE32(len(credential_signature)) || credential_signature ||
+ *   LE32(len(range_proof))        || range_proof_bytes_only ||
+ *   LE32(len(dob_commitment))     || dob_commitment_32B ||
+ *   LE32(len(challenge_id))       || challenge_id ||
+ *   LE32(len(nonce))              || nonce_32B ||
+ *   LE32(len(origin_hash))        || origin_hash_32B ||
+ *   LE32(len(asserted_min_age))   || u32_to_be(min_age) ||
+ *   LE32(len(reference_time))     || i64_to_be(reference_time) ||
+ *   LE32(len(proof_time))         || i64_to_be(proof_time)
+ * )
+ * 
+ * Range Proof Transcript (PARLEY_DOB_RANGE_V3):
+ * The Bulletproof range proof uses the following transcript:
+ * 
+ * append "domain"           = "PARLEY_DOB_RANGE_V3"
+ * append "issuer_key_id"    = issuer_key_id (ASCII)
+ * append "origin_hash"      = origin_hash (32 bytes)
+ * append "dob_commitment"   = dob_commitment (32 bytes)
+ * append "challenge_nonce"  = nonce (32 bytes)
+ * append "cutoff_days"      = u64 cutoff_days
+ * append "bits"             = 64
+ * append "proof_type"       = "dob_commitment_ge_cutoff"
+ */
 message AgeProof {
   /*----------- Pseudonymous credential -----------*/
-
-  // Hash of the issuer signature – serves as the credential's primary key.
-  bytes credential_id   = 1;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-
-  // Pedersen commitment to the user's full date‑of‑birth expressed as
-  // "days since Unix epoch".  Revealed to no‑one, proved in range.
-  bytes dob_commitment  = 2;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-
-  // Ed25519 public key of the wallet; allows linking multiple proofs
-  // from the same device if the user opts‑in.
-  bytes user_public_key = 3;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-
-  /*----------- Signatures & ZK‑Proof -----------*/
-
-  // Issuer RSA-PSS signature over dob_commitment + metadata (partially-blind).
-  bytes credential_signature = 4;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-
-  // Bulletproof showing dob_commitment encodes age ≥ min_age years.
-  // Transcript includes issuer_key_id and commitment for binding.
-  bytes range_proof          = 5;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-
-  // Wallet's Ed25519 signature over all fields to prove key possession.
-  bytes wallet_signature     = 6;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-
-  /*----------- Meta -----------*/
-
-  // When the wallet built the proof.  Allows freshness checks.
-  google.protobuf.Timestamp  proof_time = 7;
-
-  // Wire‑format version - V1 only, no legacy support.
-  parley.common.ProofVersion version    = 8;
-
-  // Hash algorithm used inside range_proof and wallet_signature.
-  parley.common.AlgoId       hash_algo  = 9;
-
-  /*----------- Challenge binding -----------*/
-
-  AgeRange asserted_age = 10;  // Copied from AgeChallenge.{min,max}_age
-  bytes    nonce        = 11;  // Copied from AgeChallenge.nonce
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  string   challenge_id = 12;  // Copied from AgeChallenge.challenge_id
-
-  /*----------- Partial-blind binding (Issues I-12, I-14) -----------*/
   
-  // Hash of the Pedersen commitment for verification
-  bytes   commitment_hash = 13;  // H(dob_commitment) - 32 bytes
+  // Hash of the issuer signature (SHA-256(credential_signature))
+  bytes credential_id = 1;
   // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
   
-  // Issuer key ID that signed this credential
-  string  issuer_key_id   = 14;
+  // Partially-blind RSA-PSS signature over commitment + metadata
+  bytes credential_signature = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
   
-  // Schema version of the credential
-  uint32  schema_version  = 15;
+  // Pedersen commitment to the user's DOB (32 bytes)
+  bytes dob_commitment = 3;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
   
-  // The partial-blind metadata that was signed with the credential
-  parley.common.PartialBlindMetadata metadata = 16;
+  // Bulletproof range proof (proof bytes only, no commitment)
+  bytes range_proof = 4;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
   
   /*----------- Issuer information -----------*/
   
+  // Issuer key ID that signed this credential
+  string issuer_key_id = 5;
+  
   // Which entity issued this credential
-  string  issuer_id = 17;  // e.g., "gov:dmv:nsw" or "bank:cba:au"
+  string issuer_id = 6;  // e.g., "gov:dmv:nsw" or "bank:cba:au"
   
   // Type of issuer for policy decisions
-  parley.common.IssuerType issuer_type = 18;
+  parley.common.IssuerType issuer_type = 7;
   
-  // How the issuer verified the DOB
-  parley.common.VerificationMethod verification_method = 19;
+  // Schema version of the credential
+  uint32 schema_version = 8;
+  
+  // The partial-blind metadata that was signed with the credential
+  parley.common.PartialBlindMetadata metadata = 9;
   
   // When the credential expires (if set by issuer)
-  google.protobuf.Timestamp credential_expiry = 20;
+  google.protobuf.Timestamp credential_expiry = 10;
+  
+  /*----------- Wallet binding -----------*/
+  
+  // Ed25519 public key of the wallet device
+  bytes user_public_key = 11;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Wallet's Ed25519 signature over WALLET_BINDING_V2
+  bytes wallet_signature = 12;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  /*----------- Challenge binding -----------*/
+  
+  // Minimum age being asserted (copied from challenge)
+  uint32 asserted_min_age = 13;
+  
+  // Challenge nonce (32 bytes, copied from challenge)
+  bytes nonce = 14;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Challenge ID (copied from challenge)
+  string challenge_id = 15;
+  
+  // SHA-256 hash of the origin (32 bytes)
+  bytes origin_hash = 16;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  /*----------- Meta -----------*/
+  
+  // When the wallet built the proof
+  google.protobuf.Timestamp proof_time = 17;
+  
+  // Wire-format version - V1 only
+  parley.common.ProofVersion version = 18;
+  
+  // Hash algorithm used inside range_proof and wallet_signature
+  parley.common.AlgoId hash_algo = 19;
+  
+  /*----------- Additional binding -----------*/
+  
+  // Hash of the Pedersen commitment for verification
+  bytes commitment_hash = 20;  // H(dob_commitment) - 32 bytes
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // How the issuer verified the DOB
+  parley.common.VerificationMethod verification_method = 21;
+  
+  // Optional: Copied max_age from challenge if present
+  uint32 asserted_max_age = 22;  // 0 = no upper bound
+}
+
+/*------------------------------------------------------------
+ *  PARAMETERS
+ *-----------------------------------------------------------*/
+
+/** Age range from the challenge for sanity-checking bounds. */
+message AgeRange {
+  uint32 min_age = 1;   // Inclusive lower bound
+  uint32 max_age = 2;   // 0 = no upper bound
 }
 
 /*------------------------------------------------------------
@@ -108,15 +150,16 @@ message AgeProof {
  *  (issuer / CA → verifier via https://static.zerokp.id/crl.json)
  *-----------------------------------------------------------*/
 message RevocationList {
-  // List of revoked credential_ids, each exactly 32 bytes.
+  // List of revoked credential_ids, each exactly 32 bytes
   repeated bytes              revoked_ids = 1;
+  // JSON encoding note: when wrapped in JSON, each bytes field MUST be base64url without padding.
 
-  // Issuer signature over the concatenated IDs plus timestamp.
-  bytes                       signature   = 2;
+  // Issuer signature over the concatenated IDs plus timestamp
+  bytes                       signature = 2;
   // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
 
-  // When the list was produced – used for staleness checks.
-  google.protobuf.Timestamp   timestamp   = 3;
+  // When the list was produced
+  google.protobuf.Timestamp   timestamp = 3;
   
   // Next expected update
   google.protobuf.Timestamp   next_update = 4;

@@ -35,7 +35,7 @@ enum SignatureAlgo {
   // reserved 3 to 10;  // Legacy algorithms explicitly not supported
 }
 
-/** Wire‑format versioning for proofs & challenges - V1 only, no legacy support. */
+/** Wire-format versioning for proofs & challenges - V1 only, no legacy support. */
 enum ProofVersion {
   PROOF_VERSION_UNSPECIFIED = 0;
   V1                        = 1;  // August 2025 – first production release
@@ -46,20 +46,23 @@ enum ProofVersion {
  *  TRANSPORT DETAILS
  *-----------------------------------------------------------*/
 
-/** How the relying‑party intends to deliver the challenge blob. */
+/** How the relying-party intends to deliver the challenge blob. */
 enum Channel {
-  CHANNEL_UNSPECIFIED = 0;  // Interpreted as QR_CODE for back‑compat
-  QR_CODE             = 1;  // Two‑device flow (desktop site + phone)
+  CHANNEL_UNSPECIFIED = 0;  // Interpreted as QR_CODE for back-compat
+  QR_CODE             = 1;  // Two-device flow (desktop site + phone)
   APP_LINK            = 2;  // Universal/App Link (same device)
-  LOOPBACK_HTTP       = 3;  // RFC 8252 loop‑back localhost server
+  LOOPBACK_HTTP       = 3;  // RFC 8252 loopback localhost server
   NEARBY_SHARE        = 4;  // Future BLE/Nearby hybrid
 }
 
-/** Transformation applied in PKCE (RFC 7636). */
+/** 
+ * Transformation applied in PKCE (RFC 7636).
+ * Only S256 is supported for production use.
+ */
 enum PkceMethod {
-  PKCE_METHOD_UNSPECIFIED = 0;  // Treat as PLAIN
-  PLAIN                   = 1;  // code_challenge == code_verifier
-  S256                    = 2;  // SHA‑256 + BASE64URL
+  PKCE_METHOD_UNSPECIFIED = 0;
+  S256                    = 1;  // SHA-256 + BASE64URL
+  // reserved 2; // PLAIN removed from public flows
 }
 
 /*------------------------------------------------------------
@@ -82,6 +85,26 @@ message AppAttestation {
   
   // When the attestation was generated
   int64 timestamp_ms = 4;
+}
+
+/**
+ * Site JWKS for challenge signature verification.
+ * Published at https://<origin>/.well-known/parley-site-jwks.json
+ */
+message SiteJwks {
+  // JWK Set JSON (UTF-8) optionally gzip-compressed
+  bytes jwks_json = 1;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Optional detached signature over jwks_json
+  bytes jwks_signature = 2;
+  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  
+  // Signature algorithm: "EdDSA" or "PS256"
+  string signature_alg = 3;
+  
+  // Signer key ID if applicable
+  string kid = 4;
 }
 
 /**
@@ -114,9 +137,9 @@ message NizkEquality {
  *-----------------------------------------------------------*/
 
 message Error {
-  uint32              code    = 1; // App‑defined
+  uint32              code    = 1; // App-defined
   string              message = 2; // Human description
-  google.protobuf.Any details = 3; // Nested service‑specific payload
+  google.protobuf.Any details = 3; // Nested service-specific payload
 }
 
 /*------------------------------------------------------------
@@ -126,7 +149,7 @@ message Error {
 /** How an officer verified the user during credential issuance. */
 enum VerificationMethod {
   VERIFICATION_METHOD_UNSPECIFIED = 0;
-  OFFICER_IN_PERSON               = 1;  // Face‑to‑face check
+  OFFICER_IN_PERSON               = 1;  // Face-to-face check
   SELF_SERVICE_KIOSK              = 2;  // Automated booth
   REMOTE_VIDEO_VERIFICATION        = 3;  // Video call verification
   BANK_KYC_RECORDS                = 4;  // Bank's existing KYC verification
