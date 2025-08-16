@@ -105,8 +105,8 @@ message AgeChallenge {
   // Format: "android:com.example.app#<sha256-cert>" or "ios:com.example.app#<team-id>"
   string aud_app = 16;
   
-  // DEPRECATED: Use aud_app instead (kept for backward compatibility)
-  string app_package = 17;
+  // DEPRECATED: Use aud_app instead
+  reserved 17;
   
   // PKCE code challenge (REQUIRED for same-device flows)
   // Must be BASE64URL(SHA-256(code_verifier))
@@ -140,7 +140,7 @@ message CreateChallengeRequest {
   string callback_uri = 5;
   
   // Optional app attestation for verification (RP app attestation)
-  parley.common.AppAttestation attestation = 6;
+  reserved 6;
   
   // PKCE code challenge (REQUIRED for same-device flows)
   string code_challenge = 7;
@@ -193,5 +193,5 @@ message VerificationResult {
   google.protobuf.Timestamp   verification_time = 5;
   
   // The app that was verified (if app attestation was provided)
-  string                      verified_app = 6;
+  reserved 6;
 }

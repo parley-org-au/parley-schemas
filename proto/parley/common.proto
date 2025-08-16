@@ -88,34 +88,6 @@ enum IssuerType {
 }
 
 /*------------------------------------------------------------
- *  ATTESTATION
- *-----------------------------------------------------------*/
-
-/**
- * Application attestation presented by an RP native app when creating
- * a challenge. The wallet does not need to receive this value back.
- *
- * JSON encoding note: any bytes field in this file MUST be represented
- * as base64url WITHOUT padding when serialized to JSON.
- */
-message AppAttestation {
-  oneof token {
-    string android_play_integrity_jws = 1; // JWS from Google Play Integrity API
-    string ios_app_attest_jws         = 2; // JWS from Apple App Attest
-  }
-
-  // Random nonce bound by the attestation (recommended: 32 bytes).
-  bytes nonce = 3;
-
-  // Time the attestation was created/validated (server clock or attester).
-  google.protobuf.Timestamp timestamp = 4;
-
-  // Package/bundle identifiers asserted by the attestation layer.
-  string android_package_name = 5; // e.g., com.example.app
-  string ios_bundle_id        = 6; // e.g., com.example.app.ios
-}
-
-/*------------------------------------------------------------
  *  CRYPTOGRAPHIC METADATA
  *-----------------------------------------------------------*/
 
