@@ -6,47 +6,45 @@ option go_package   = "github.com/parleyid/parley-schemas/go/parley/common;commo
 option java_package = "id.parley.schemas.parley.common";
 option java_outer_classname = "ParleyCommonProto";
 
-import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
 
 /*------------------------------------------------------------
- *  ALGORITHMS & VERSIONS
+ *  ALGORITHMS, VERSIONS & ENUMS
  *-----------------------------------------------------------*/
 
-/** 
+/**
  * Cryptographic digests supported across Parley.
- * IMPORTANT: Only Ed25519 and RSA-PSS signatures allowed.
- * "none" and RSA-PKCS1v1.5 are explicitly forbidden for security.
  */
 enum AlgoId {
-  ALGO_UNSPECIFIED = 0;   // Invalid / reserved
-  SHA_256          = 1;
-  SHA_512          = 2;
-  BLAKE2B_256      = 3;
+  ALGO_ID_UNSPECIFIED = 0;
+  SHA_256             = 1;
+  SHA_512             = 2;
+  BLAKE2B_256         = 3;
 }
 
-/** 
- * Signature algorithms allowed in the system.
- * SECURITY: RSA-PKCS1v1.5 and "none" are explicitly forbidden.
+/**
+ * Digital signature algorithms used across Parley.
+ * RSA must be PSS; PKCS#1 v1.5 is not permitted.
  */
 enum SignatureAlgo {
   SIGNATURE_ALGO_UNSPECIFIED = 0;
-  ED25519                    = 1;  // EdDSA with Ed25519
-  RSA_PSS_SHA256             = 2;  // RSA-PSS with SHA-256
-  // reserved 3 to 10;  // Legacy algorithms explicitly not supported
+  ED25519                     = 1; // EdDSA over Ed25519
+  RSA_PSS_SHA256              = 2; // RSASSA-PSS w/ SHA-256
 }
 
-/** Wire-format versioning for proofs & challenges - V1 only, no legacy support. */
+/**
+ * On-the-wire proof versions. Keep a single active value for v1.
+ */
 enum ProofVersion {
   PROOF_VERSION_UNSPECIFIED = 0;
-  V1                        = 1;  // August 2025 – first production release
-  // No other versions - this is v1 only, no legacy support
+  V1                        = 1;
 }
 
 /*------------------------------------------------------------
  *  TRANSPORT DETAILS
  *-----------------------------------------------------------*/
 
-/** How the relying-party intends to deliver the challenge blob. */
+/** How the relying party intends to deliver the challenge blob. */
 enum Channel {
   CHANNEL_UNSPECIFIED = 0;  // Interpreted as QR_CODE for back-compat
   QR_CODE             = 1;  // Two-device flow (desktop site + phone)
@@ -55,138 +53,139 @@ enum Channel {
   NEARBY_SHARE        = 4;  // Future BLE/Nearby hybrid
 }
 
-/** 
+/**
  * Transformation applied in PKCE (RFC 7636).
- * Only S256 is supported for production use.
+ * Public flows MUST use S256. PLAIN is intentionally not supported.
  */
 enum PkceMethod {
   PKCE_METHOD_UNSPECIFIED = 0;
-  S256                    = 1;  // SHA-256 + BASE64URL
-  // reserved 2; // PLAIN removed from public flows
+  S256                     = 1;
+  // reserved 2; // PLAIN intentionally unsupported
 }
 
 /*------------------------------------------------------------
- *  SECURITY ENHANCEMENTS
+ *  ISSUER & VERIFICATION CLASSIFIERS
+ *-----------------------------------------------------------*/
+
+/** Provenance of the real-world verification used during issuance. */
+enum VerificationMethod {
+  VERIFICATION_METHOD_UNSPECIFIED = 0;
+  OFFICER_IN_PERSON               = 1;
+  SELF_SERVICE_KIOSK              = 2;
+  REMOTE_VIDEO_VERIFICATION       = 3;
+  BANK_KYC_RECORDS                = 4;
+  TRUSTED_THIRD_PARTY_RECORDS     = 5;
+}
+
+/** Entity type for an issuer. */
+enum IssuerType {
+  ISSUER_TYPE_UNSPECIFIED = 0;
+  GOVERNMENT              = 1;
+  BANK                    = 2;
+  TELCO                   = 3;
+  POST_OFFICE             = 4;
+  TRUSTED_THIRD_PARTY     = 5;
+}
+
+/*------------------------------------------------------------
+ *  ATTESTATION
  *-----------------------------------------------------------*/
 
 /**
- * App attestation token from mobile platforms.
- * Used to verify the requesting app's identity and integrity.
+ * Application attestation presented by an RP native app when creating
+ * a challenge. The wallet does not need to receive this value back.
+ *
+ * JSON encoding note: any bytes field in this file MUST be represented
+ * as base64url WITHOUT padding when serialized to JSON.
  */
 message AppAttestation {
   oneof token {
-    string android_play_integrity_jws = 1;  // Play Integrity API signed token
-    string ios_app_attest_jws         = 2;  // DeviceCheck App Attest token
+    string android_play_integrity_jws = 1; // JWS from Google Play Integrity API
+    string ios_app_attest_jws         = 2; // JWS from Apple App Attest
   }
-  
-  // Nonce that should match hash of challenge draft for freshness
+
+  // Random nonce bound by the attestation (recommended: 32 bytes).
   bytes nonce = 3;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // When the attestation was generated
-  int64 timestamp_ms = 4;
+
+  // Time the attestation was created/validated (server clock or attester).
+  google.protobuf.Timestamp timestamp = 4;
+
+  // Package/bundle identifiers asserted by the attestation layer.
+  string android_package_name = 5; // e.g., com.example.app
+  string ios_bundle_id        = 6; // e.g., com.example.app.ios
 }
 
-/**
- * Site JWKS for challenge signature verification.
- * Published at https://<origin>/.well-known/parley-site-jwks.json
- */
-message SiteJwks {
-  // JWK Set JSON (UTF-8) optionally gzip-compressed
-  bytes jwks_json = 1;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // Optional detached signature over jwks_json
-  bytes jwks_signature = 2;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // Signature algorithm: "EdDSA" or "PS256"
-  string signature_alg = 3;
-  
-  // Signer key ID if applicable
-  string kid = 4;
-}
+/*------------------------------------------------------------
+ *  CRYPTOGRAPHIC METADATA
+ *-----------------------------------------------------------*/
 
 /**
- * Metadata for partially-blind signatures.
- * This data is publicly bound into the signature but doesn't reveal the commitment.
+ * Metadata that is partially-blinded into the credential signature.
+ * Ensures signatures are bound to the issuer key and schema in use.
+ *
+ * JSON encoding note: bytes fields MUST be base64url without padding.
  */
 message PartialBlindMetadata {
-  bytes  commitment_hash = 1;  // H(Pedersen commitment) - 32 bytes
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  string issuer_key_id   = 2;  // Key ID from JWKS
-  uint32 schema_version  = 3;  // Protocol version for this credential
+  bytes commitment_hash = 1;  // H(dob_commitment) (32 bytes when SHA-256)
+  string issuer_key_id  = 2;  // JOSE 'kid' for the issuing key
+  uint32 schema_version = 3;  // Credential schema version
 }
 
 /**
- * NIZK equality proof showing that the displayed DOB equals the committed DOB.
- * Uses Schnorr-based proof for Pedersen commitments.
+ * NIZK proof that the cleartext value shown to an officer equals
+ * the Pedersen commitment included in the issuance request.
+ *
+ * JSON encoding note: bytes fields MUST be base64url without padding.
  */
 message NizkEquality {
-  bytes  proof          = 1;  // The actual proof bytes (c || z format for Schnorr)
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  string alg            = 2;  // Algorithm identifier (e.g., "pedersen-schnorr-sha256")
-  bytes  commitment     = 3;  // The Pedersen commitment C = g^m * h^r
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  bytes  challenge_hash = 4;  // Fiat-Shamir challenge for non-interactive proof
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+  bytes proof          = 1; // Scheme-specific proof bytes
+  string alg           = 2; // e.g., "SchnorrEq/v1"
+  bytes commitment     = 3; // The Pedersen commitment (32 bytes)
+  bytes challenge_hash = 4; // Domain-separated challenge hash
 }
 
 /*------------------------------------------------------------
- *  GENERIC ERROR STRUCT
+ *  SITE JWKS (WELL-KNOWN)
  *-----------------------------------------------------------*/
-
-message Error {
-  uint32              code    = 1; // App-defined
-  string              message = 2; // Human description
-  google.protobuf.Any details = 3; // Nested service-specific payload
-}
-
-/*------------------------------------------------------------
- *  ISSUANCE CONTEXT
- *-----------------------------------------------------------*/
-
-/** How an officer verified the user during credential issuance. */
-enum VerificationMethod {
-  VERIFICATION_METHOD_UNSPECIFIED = 0;
-  OFFICER_IN_PERSON               = 1;  // Face-to-face check
-  SELF_SERVICE_KIOSK              = 2;  // Automated booth
-  REMOTE_VIDEO_VERIFICATION        = 3;  // Video call verification
-  BANK_KYC_RECORDS                = 4;  // Bank's existing KYC verification
-  TRUSTED_THIRD_PARTY_RECORDS     = 5;  // Other approved entity's records
-}
 
 /**
- * Types of entities allowed to issue age credentials.
+ * Snapshot of a site's JWKS and (optionally) a signature over it.
+ * Wallets fetch JWKS from: https://<origin>/.well-known/parley-site-jwks.json
+ * If a detached signature is provided, verify per 'signature_alg' and 'kid'.
+ *
+ * JSON encoding note: bytes fields MUST be base64url without padding.
  */
-enum IssuerType {
-  ISSUER_TYPE_UNSPECIFIED  = 0;
-  GOVERNMENT               = 1;  // Government offices/DMV
-  BANK                     = 2;  // Licensed banks with KYC
-  TELCO                    = 3;  // Telecom providers with ID verification
-  POST_OFFICE              = 4;  // Postal services with ID verification
-  TRUSTED_THIRD_PARTY      = 5;  // Other certified entities
+message SiteJwks {
+  bytes jwks_json       = 1; // UTF-8 JWK Set JSON; optionally gzipped (document separately)
+  bytes jwks_signature  = 2; // Detached signature over jwks_json (optional)
+  string signature_alg  = 3; // "EdDSA" (Ed25519) or "PS256"
+  string kid            = 4; // Signer key id (if applicable)
 }
 
+/*------------------------------------------------------------
+ *  ISSUER AUTHORIZATION TOKEN
+ *-----------------------------------------------------------*/
+
 /**
- * Authentication token from a trusted issuer's system.
- * Used when banks/third parties issue credentials remotely.
+ * Token presented to an issuer-service to authorize issuance.
+ * All timestamps are canonical google.protobuf.Timestamp values.
+ *
+ * JSON encoding note: bytes fields MUST be base64url without padding.
  */
 message IssuerAuthToken {
-  oneof token {
-    string oauth2_jwt       = 1;  // OAuth2/OIDC token from bank
-    string saml_assertion   = 2;  // SAML assertion
-    string proprietary_jwt  = 3;  // Issuer-specific signed JWT
+  oneof credential {
+    string oauth2_jwt      = 1; // OAuth 2.0/OIDC access or ID token
+    string saml_assertion  = 2; // SAML assertion
+    string proprietary_jwt = 3; // Issuer-specific signed JWT
   }
-  
-  string issuer_id = 4;          // Registered issuer identifier
-  int64 issued_at_ms = 5;        // Token issuance time
-  int64 expires_at_ms = 6;       // Token expiration
-  
-  // User identifier at the issuer (encrypted/hashed)
+
+  string issuer_id = 4;                         // Registered issuer identifier
+  google.protobuf.Timestamp issued_at  = 5;     // Token issuance time
+  google.protobuf.Timestamp expires_at = 6;     // Token expiration
+
+  // User identifier at the issuer (hashed/encrypted per issuer policy).
   string subject_id = 7;
-  
-  // Proof that user authorized this issuance
-  bytes user_consent_signature = 8;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
+
+  // Proof that user consented to issuance (wallet or app signature).
+  bytes user_consent_signature = 8; // base64url in JSON
 }

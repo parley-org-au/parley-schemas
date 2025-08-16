@@ -7,4 +7,4 @@ lint:
     - STANDARD  # or DEFAULT for less strict
 breaking:
   use:
-    - FILE
+    - PACKAGE
