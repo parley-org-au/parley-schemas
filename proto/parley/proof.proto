@@ -146,32 +146,6 @@ message AgeRange {
 }
 
 /*------------------------------------------------------------
- *  CREDENTIAL REVOCATION LIST
- *  (issuer / CA → verifier via https://static.zerokp.id/crl.json)
- *-----------------------------------------------------------*/
-message RevocationList {
-  // List of revoked credential_ids, each exactly 32 bytes
-  repeated bytes              revoked_ids = 1;
-  // JSON encoding note: when wrapped in JSON, each bytes field MUST be base64url without padding.
-
-  // Issuer signature over the concatenated IDs plus timestamp
-  bytes                       signature = 2;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-
-  // When the list was produced
-  google.protobuf.Timestamp   timestamp = 3;
-  
-  // Next expected update
-  google.protobuf.Timestamp   next_update = 4;
-  
-  // Issuer key ID that signed this list
-  string                      issuer_key_id = 5;
-  
-  // CRL sequence number
-  uint64                      sequence = 6;
-}
-
-/*------------------------------------------------------------
  *  PROOF VERIFICATION REQUEST
  *  (Internal structure for verifier-core)
  *-----------------------------------------------------------*/
