@@ -115,7 +115,12 @@ message AgeChallenge {
   // PKCE method (REQUIRED, must be S256)
   parley.common.PkceMethod code_challenge_method = 19;
   
-  // reserved 20 for future fields
+  // Canonical URL where the wallet should POST the AgeProof
+  // (e.g., "https://zerokp.id/v1")
+  // If empty, wallet should use the origin as the base URL
+  string verify_base = 20;
+  
+  // reserved 21-30 for future fields
 }
 
 /*------------------------------------------------------------
