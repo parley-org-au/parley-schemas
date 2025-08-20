@@ -29,7 +29,8 @@ enum AlgoId {
 enum SignatureAlgo {
   SIGNATURE_ALGO_UNSPECIFIED = 0;
   ED25519                     = 1; // EdDSA over Ed25519
-  RSA_PSS_SHA256              = 2; // RSASSA-PSS w/ SHA-256
+  RSA_PSS_SHA256              = 2; // RSASSA-PSS w/ SHA-256 (deprecated)
+  SCHNORR_ED25519_BLIND       = 3; // Schnorr blind signatures with Ed25519
 }
 
 /**
