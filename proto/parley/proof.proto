@@ -11,6 +11,7 @@ message PublicInputs {
   uint32 cutoff_days      = 1; // threshold in days since epoch (e.g., 18y)
   bytes  rp_challenge     = 2; // 32-byte binding to RP (origin+nonce hash)
   IssuerKeyHash issuer    = 3; // hash of issuer RJ pubkey used inside the circuit
+  bytes  cred_nullifier   = 4; // 32 bytes: blake2s(NULL_V1_DST || C); server-only usage
 }
 
 // Groth16 proof blob with minimal metadata for routing/compatibility.
