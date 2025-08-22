@@ -1,192 +1,40 @@
 syntax = "proto3";
 
-package parley.proof;
+package parley.v1;
 
-option go_package   = "github.com/parleyid/parley-schemas/go/parley/proof;proof";
-option java_package = "id.parley.schemas.parley.proof";
-option java_outer_classname = "ParleyProofProto";
+import "common.proto";
 
-import "google/protobuf/timestamp.proto";
-import "parley/common.proto";
+// === Zero-knowledge age proof artifacts ===
 
-/*------------------------------------------------------------
- *  ZERO-KNOWLEDGE AGE PROOF with Partial-Blind Binding
- *  (wallet → verifier-core via /v1/verify)
- *-----------------------------------------------------------*/
+// Public inputs used by verifier (and revealed to the verifier only).
+message PublicInputs {
+  uint32 cutoff_days      = 1; // threshold in days since epoch (e.g., 18y)
+  bytes  rp_challenge     = 2; // 32-byte binding to RP (origin+nonce hash)
+  IssuerKeyHash issuer    = 3; // hash of issuer RJ pubkey used inside the circuit
+}
 
-/**
- * Age proof demonstrating age eligibility without revealing exact date of birth.
- * 
- * Wallet Binding Signature (WALLET_BINDING_V2):
- * The wallet_signature is computed over the following canonical message:
- * 
- * WALLET_BINDING_V2 := SHA-256(
- *   "PARLEY_WALLET_BINDING_V2" ||
- *   LE32(len(credential_id))      || credential_id ||
- *   LE32(len(credential_signature)) || credential_signature ||
- *   LE32(len(range_proof))        || range_proof_bytes_only ||
- *   LE32(len(dob_commitment))     || dob_commitment_32B ||
- *   LE32(len(challenge_id))       || challenge_id ||
- *   LE32(len(nonce))              || nonce_32B ||
- *   LE32(len(origin_hash))        || origin_hash_32B ||
- *   LE32(len(asserted_min_age))   || u32_to_be(min_age) ||
- *   LE32(len(reference_time))     || i64_to_be(reference_time) ||
- *   LE32(len(proof_time))         || i64_to_be(proof_time)
- * )
- * 
- * Range Proof Transcript (PARLEY_DOB_RANGE_V3):
- * The Bulletproof range proof uses the following transcript:
- * 
- * append "domain"           = "PARLEY_DOB_RANGE_V3"
- * append "issuer_key_id"    = issuer_key_id (ASCII)
- * append "origin_hash"      = origin_hash (32 bytes)
- * append "dob_commitment"   = dob_commitment (32 bytes)
- * append "challenge_nonce"  = nonce (32 bytes)
- * append "cutoff_days"      = u64 cutoff_days
- * append "bits"             = 64
- * append "proof_type"       = "dob_commitment_ge_cutoff"
- */
+// Groth16 proof blob with minimal metadata for routing/compatibility.
 message AgeProof {
-  /*----------- Pseudonymous credential -----------*/
-  
-  // Hash of the issuer signature (SHA-256(credential_signature))
-  bytes credential_id = 1;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // Partially-blind RSA-PSS signature over commitment + metadata
-  bytes credential_signature = 2;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // Pedersen commitment to the user's DOB (32 bytes)
-  bytes dob_commitment = 3;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // Bulletproof range proof (proof bytes only, no commitment)
-  bytes range_proof = 4;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  /*----------- Issuer information -----------*/
-  
-  // Issuer key ID that signed this credential
-  string issuer_key_id = 5;
-  
-  // Which entity issued this credential
-  string issuer_id = 6;  // e.g., "gov:dmv:nsw" or "bank:cba:au"
-  
-  // Type of issuer for policy decisions
-  parley.common.IssuerType issuer_type = 7;
-  
-  // Schema version of the credential
-  uint32 schema_version = 8;
-  
-  // The partial-blind metadata that was signed with the credential
-  parley.common.PartialBlindMetadata metadata = 9;
-  
-  // When the credential expires (if set by issuer)
-  google.protobuf.Timestamp credential_expiry = 10;
-  
-  /*----------- Wallet binding -----------*/
-  
-  // Ed25519 public key of the wallet device
-  bytes user_public_key = 11;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // Wallet's Ed25519 signature over WALLET_BINDING_V2
-  bytes wallet_signature = 12;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  /*----------- Challenge binding -----------*/
-  
-  // Minimum age being asserted (copied from challenge)
-  uint32 asserted_min_age = 13;
-  
-  // Challenge nonce (32 bytes, copied from challenge)
-  bytes nonce = 14;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // Challenge ID (copied from challenge)
-  string challenge_id = 15;
-  
-  // SHA-256 hash of the origin (32 bytes)
-  bytes origin_hash = 16;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  /*----------- Meta -----------*/
-  
-  // When the wallet built the proof
-  google.protobuf.Timestamp proof_time = 17;
-  
-  // Wire-format version - V1 only
-  parley.common.ProofVersion version = 18;
-  
-  // Hash algorithm used inside range_proof and wallet_signature
-  parley.common.AlgoId hash_algo = 19;
-  
-  /*----------- Additional binding -----------*/
-  
-  // Hash of the Pedersen commitment for verification
-  bytes commitment_hash = 20;  // H(dob_commitment) - 32 bytes
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // How the issuer verified the DOB
-  parley.common.VerificationMethod verification_method = 21;
-  
-  // Optional: Copied max_age from challenge if present
-  uint32 asserted_max_age = 22;  // 0 = no upper bound
+  uint32 verifying_key_id = 1; // server-side VK selector
+  PublicInputs public     = 2; // assembled by the prover from the challenge
+  bytes  proof            = 3; // Groth16 proof bytes
 }
 
-/*------------------------------------------------------------
- *  PARAMETERS
- *-----------------------------------------------------------*/
-
-/** Age range from the challenge for sanity-checking bounds. */
-message AgeRange {
-  uint32 min_age = 1;   // Inclusive lower bound
-  uint32 max_age = 2;   // 0 = no upper bound
-}
-
-/*------------------------------------------------------------
- *  PROOF VERIFICATION REQUEST
- *  (Internal structure for verifier-core)
- *-----------------------------------------------------------*/
-message ProofVerificationRequest {
-  // The proof to verify
+// Request from wallet to verifier containing the proof.
+message VerifyRequest {
   AgeProof proof = 1;
-  
-  // The challenge it's responding to
-  bytes challenge = 2;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // Current JWKS snapshot (no implicit network calls)
-  bytes jwks_snapshot = 3;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // Current CRL snapshot (no implicit network calls)  
-  bytes crl_snapshot = 4;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  // Maximum acceptable clock skew in seconds
-  uint32 max_clock_skew = 5;
-  
-  // Current time for verification (if not using system time)
-  google.protobuf.Timestamp verification_time = 6;
 }
 
-/*------------------------------------------------------------
- *  PROOF VERIFICATION RESPONSE
- *  (Internal structure from verifier-core)
- *-----------------------------------------------------------*/
-message ProofVerificationResponse {
-  bool   is_valid = 1;
-  string error    = 2;  // Empty if valid
-  
-  // Detailed validation results
-  bool credential_signature_valid = 3;
-  bool range_proof_valid         = 4;
-  bool wallet_signature_valid    = 5;
-  bool commitment_binding_valid  = 6;
-  bool not_revoked              = 7;
-  bool within_time_bounds       = 8;
-  bool challenge_binding_valid  = 9;
-  bool issuer_key_valid        = 10;
+// Response from verifier to RP / wallet.
+message VerifyResponse {
+  enum Result {
+    RESULT_UNSPECIFIED = 0;
+    OK                 = 1;
+    INVALID_PROOF      = 2;
+    EXPIRED_CHALLENGE  = 3;
+    POLICY_REJECTED    = 4; // e.g., issuer not in JWKS/allowed set
+  }
+  Result result = 1;
+  // Echo the issuer hash for accounting (server-side use; do not forward to RP if not needed).
+  IssuerKeyHash issuer = 2;
 }

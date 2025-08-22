@@ -1,202 +1,54 @@
 syntax = "proto3";
 
-package parley.challenge;
+package parley.v1;
 
-option go_package   = "github.com/parleyid/parley-schemas/go/parley/challenge;challenge";
-option java_package = "id.parley.schemas.parley.challenge";
-option java_outer_classname = "ParleyChallengeProto";
+import "proof.proto";
 
-import "google/protobuf/timestamp.proto";
-import "parley/common.proto";
+// === Challenge / PKCE flow for verifier-api ===
 
-/*------------------------------------------------------------
- *  AGE-GATE CHALLENGE
- *  (relying-party → wallet, via agegate-js)
- *  Routes: POST /v1/challenge, GET /v1/challenge/{sid}
- *-----------------------------------------------------------*/
+enum CodeChallengeMethod {
+  CODE_CHALLENGE_METHOD_UNSPECIFIED = 0;
+  S256 = 1;
+}
 
-/**
- * Age verification challenge issued by a relying party.
- * 
- * Challenge Signature (CHALLENGE_SIG_V1):
- * The site_signature is computed over the following canonical message:
- * 
- * CHALLENGE_SIG_V1 := SHA-256(
- *   "PARLEY_CHALLENGE_V1" ||
- *   LE32(len(challenge_id)) || challenge_id ||
- *   LE32(len(nonce))        || nonce ||                // 32 bytes
- *   LE32(len(origin_hash))  || origin_hash ||          // 32 bytes
- *   LE32(len(min_age))      || u32_to_be(min_age) ||
- *   LE32(len(max_age))      || u32_to_be(max_age) ||   // 0 == no upper bound
- *   LE32(len(issued_at))    || i64_to_be(issued_at) ||
- *   LE32(len(expires_at))   || i64_to_be(expires_at) ||
- *   LE32(len(reference_time)) || i64_to_be(reference_time) ||
- *   LE32(len(version))      || "V1"
- * )
- * 
- * Signed with RP site private key (Ed25519 or RSA-PSS).
- */
-message AgeChallenge {
-  /*----------- Identification -----------*/
-  
-  // Uniquely identifies this challenge instance (UUID-v4)
+// Start a verification challenge (RP -> verifier).
+message StartChallengeRequest {
+  string origin              = 1; // RP origin or app-id
+  uint32 cutoff_days         = 2; // required threshold
+  string code_challenge      = 3; // base64url(no padding) of SHA-256(code_verifier)
+  CodeChallengeMethod method = 4; // must be S256
+}
+
+// Verifier -> RP & Wallet: challenge material
+message StartChallengeResponse {
+  string challenge_id           = 1;
+  bytes  rp_challenge           = 2; // 32 bytes: binding to RP (origin, nonce, etc.)
+  uint32 cutoff_days            = 3;
+  uint32 verifying_key_id       = 4;
+  // absolute expiry is an HTTP concern; proto stays minimal
+}
+
+// Wallet -> Verifier: present proof for a challenge.
+message SubmitProofRequest {
   string  challenge_id = 1;
-  
-  /*----------- Anti-replay / binding -----*/
-  
-  // 32 bytes of CSPRNG entropy to bind the proof to this challenge
-  bytes   nonce = 2;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  /*----------- Origin binding -----------*/
-  
-  // RP origin that will receive the result (e.g. "https://socialmedia.com")
-  string  origin = 3;
-  
-  // SHA-256 hash of the origin for cryptographic binding
-  bytes   origin_hash = 4;  // 32 bytes, SHA-256(origin)
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  /*----------- Age requirement ----------*/
-  
-  // The minimum legal age the RP requires (REQUIRED, no default)
-  uint32  min_age = 5;
-  
-  // Optional upper bound (0 means no upper limit)
-  uint32  max_age = 6;
-  
-  /*----------- Authenticity --------------*/
-  
-  // Signature algorithm used for site_signature
-  parley.common.SignatureAlgo site_sig_algo = 7;  // ED25519 or RSA_PSS_SHA256
-  
-  // Key ID from site's JWKS for signature verification
-  string  site_key_id = 8;
-  
-  // RP signature over security-relevant fields (see CHALLENGE_SIG_V1 above)
-  bytes   site_signature = 9;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-  
-  /*----------- Lifetime ------------------*/
-  
-  // When the challenge was produced
-  google.protobuf.Timestamp issued_at = 10;
-  
-  // Absolute expiry after which wallet must refuse to build proofs
-  google.protobuf.Timestamp expires_at = 11;
-  
-  // Optional authoritative "now" chosen by the verifier
-  google.protobuf.Timestamp reference_time = 12;
-  
-  /*----------- Negotiation ---------------*/
-  
-  // Version of the proof format - V1 only
-  repeated parley.common.ProofVersion supported_versions = 13;
-  
-  /*----------- Same-device enhancements -----------*/
-  
-  // How the RP intends to deliver the challenge
-  parley.common.Channel channel = 14;
-  
-  // Deep-link the wallet should invoke after successful proof
-  string callback_uri = 15;
-  
-  // Audience app identifier for app-to-app flows
-  // Format: "android:com.example.app#<sha256-cert>" or "ios:com.example.app#<team-id>"
-  string aud_app = 16;
-  
-  // DEPRECATED: Use aud_app instead
-  reserved 17;
-  
-  // PKCE code challenge (REQUIRED for same-device flows)
-  // Must be BASE64URL(SHA-256(code_verifier))
-  string code_challenge = 18;
-  
-  // PKCE method (REQUIRED, must be S256)
-  parley.common.PkceMethod code_challenge_method = 19;
-  
-  // Canonical URL where the wallet should POST the AgeProof
-  // (e.g., "https://zerokp.id/v1")
-  // If empty, wallet should use the origin as the base URL
-  string verify_base = 20;
-  
-  // reserved 21-30 for future fields
+  // The AgeProof embeds rp_challenge and cutoff_days; verifier checks they match this challenge.
+  AgeProof proof       = 2;
+  // If you implement PKCE strictly, include the code_verifier here:
+  string  code_verifier = 3;
 }
 
-/*------------------------------------------------------------
- *  CREATE CHALLENGE REQUEST
- *  (RP → verifier-api POST /v1/challenge)
- *-----------------------------------------------------------*/
-message CreateChallengeRequest {
-  // Web origin or app identifier requesting the challenge
-  // Server derives this from request; clients may omit
-  string origin = 1;
-  
-  // Minimum age requirement (REQUIRED)
-  uint32 min_age = 2;
-  
-  // Optional maximum age (0 = no limit)
-  uint32 max_age = 3;
-  
-  // Optional app identifier for mobile flows
-  string aud_app = 4;
-  
-  // Optional callback URI for deep-linking
-  string callback_uri = 5;
-  
-  // Optional app attestation for verification (RP app attestation)
-  reserved 6;
-  
-  // PKCE code challenge (REQUIRED for same-device flows)
-  string code_challenge = 7;
-  
-  // PKCE method (REQUIRED, must be S256)
-  parley.common.PkceMethod code_challenge_method = 8;
-  
-  // Optional custom expiry duration in seconds (default: 300)
-  uint32 expires_in = 9;
-}
-
-/*------------------------------------------------------------
- *  WALLET → VERIFIER-API  (POST /v1/verify)
- *-----------------------------------------------------------*/
-message ProofSubmission {
-  // Mirrors AgeChallenge.challenge_id
+// RP -> Verifier: poll challenge status
+message PollChallengeRequest {
   string challenge_id = 1;
-
-  // Binary-protobuf-encoded AgeProof (BASE64URL in JSON wrapper)
-  bytes  age_proof = 2;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-
-  // Present only when the RP set a PKCE code_challenge
-  // Verified by hashing and comparing to that challenge
-  string code_verifier = 3;
-  
-  // Session ID for the verification request (optional)
-  // If provided it MUST equal the path parameter :sid on /v1/verify/:sid
-  string session_id = 4;
 }
 
-/*------------------------------------------------------------
- *  VERIFIER-API → RP / WALLET  (result)
- *-----------------------------------------------------------*/
-message VerificationResult {
-  // True when verifier-core validated the proof end-to-end
-  bool                        is_valid = 1;
-
-  // Machine-readable error code (0 = OK)
-  uint32                      error_code = 2;
-
-  // Human-readable message for analytics / UX
-  string                      message = 3;
-
-  // Credential the proof was based on
-  bytes                       credential_id = 4;
-  // JSON encoding note: when wrapped in JSON, this bytes field MUST be base64url without padding.
-
-  // When the verification was completed on the server
-  google.protobuf.Timestamp   verification_time = 5;
-  
-  // The app that was verified (if app attestation was provided)
-  reserved 6;
+message PollChallengeResponse {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    PENDING = 1;
+    VERIFIED = 2;
+    FAILED = 3;
+    EXPIRED = 4;
+  }
+  Status status = 1;
 }

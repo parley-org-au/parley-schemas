@@ -1,164 +1,36 @@
 syntax = "proto3";
 
-package parley.common;
-
-option go_package   = "github.com/parleyid/parley-schemas/go/parley/common;common";
-option java_package = "id.parley.schemas.parley.common";
-option java_outer_classname = "ParleyCommonProto";
+package parley.v1;
 
 import "google/protobuf/timestamp.proto";
 
-/*------------------------------------------------------------
- *  ALGORITHMS, VERSIONS & ENUMS
- *-----------------------------------------------------------*/
+// === Common types used across Parley ===
 
-/**
- * Cryptographic digests supported across Parley.
- */
-enum AlgoId {
-  ALGO_ID_UNSPECIFIED = 0;
-  SHA_256             = 1;
-  SHA_512             = 2;
-  BLAKE2B_256         = 3;
+// JWKS-based issuer identity: we reveal issuer identity for royalty accounting.
+message IssuerKeyHash {
+  // BLAKE2s-256( "zerokp.issuer.vk.v1" || issuer_rj_vk_bytes )
+  bytes value = 1; // 32 bytes
 }
 
-/**
- * Digital signature algorithms used across Parley.
- * RSA must be PSS; PKCS#1 v1.5 is not permitted.
- */
-enum SignatureAlgo {
-  SIGNATURE_ALGO_UNSPECIFIED = 0;
-  ED25519                     = 1; // EdDSA over Ed25519
-  RSA_PSS_SHA256              = 2; // RSASSA-PSS w/ SHA-256 (deprecated)
-  SCHNORR_ED25519_BLIND       = 3; // Schnorr blind signatures with Ed25519
+// A compact, schema-tagged credential message committed to within the SNARK.
+message CredMsg {
+  uint32 v      = 1; // credential format version (binds into the RedJubjub prehash)
+  string kid    = 2; // issuer key id (from JWKS)
+  bytes  c      = 3; // 32-byte Jubjub Pedersen commitment to DOB
+  uint64 iat    = 4; // issued-at (seconds since Unix epoch)
+  uint64 exp    = 5; // expiry (seconds since Unix epoch)
+  string schema = 6; // e.g. "dob-v1"
 }
 
-/**
- * On-the-wire proof versions. Keep a single active value for v1.
- */
-enum ProofVersion {
-  PROOF_VERSION_UNSPECIFIED = 0;
-  V1                        = 1;
+// A RedJubjub signature over BLAKE2s(cred preimage). Signature bytes are not revealed in proofs.
+message RedJubjubSignature {
+  bytes sig = 1; // 64 bytes
 }
 
-/*------------------------------------------------------------
- *  TRANSPORT DETAILS
- *-----------------------------------------------------------*/
-
-/** How the relying party intends to deliver the challenge blob. */
-enum Channel {
-  CHANNEL_UNSPECIFIED = 0;  // Interpreted as QR_CODE for back-compat
-  QR_CODE             = 1;  // Two-device flow (desktop site + phone)
-  APP_LINK            = 2;  // Universal/App Link (same device)
-  LOOPBACK_HTTP       = 3;  // RFC 8252 loopback localhost server
-  NEARBY_SHARE        = 4;  // Future BLE/Nearby hybrid
-}
-
-/**
- * Transformation applied in PKCE (RFC 7636).
- * Public flows MUST use S256. PLAIN is intentionally not supported.
- */
-enum PkceMethod {
-  PKCE_METHOD_UNSPECIFIED = 0;
-  S256                     = 1;
-  // reserved 2; // PLAIN intentionally unsupported
-}
-
-/*------------------------------------------------------------
- *  ISSUER & VERIFICATION CLASSIFIERS
- *-----------------------------------------------------------*/
-
-/** Provenance of the real-world verification used during issuance. */
-enum VerificationMethod {
-  VERIFICATION_METHOD_UNSPECIFIED = 0;
-  OFFICER_IN_PERSON               = 1;
-  SELF_SERVICE_KIOSK              = 2;
-  REMOTE_VIDEO_VERIFICATION       = 3;
-  BANK_KYC_RECORDS                = 4;
-  TRUSTED_THIRD_PARTY_RECORDS     = 5;
-}
-
-/** Entity type for an issuer. */
-enum IssuerType {
-  ISSUER_TYPE_UNSPECIFIED = 0;
-  GOVERNMENT              = 1;
-  BANK                    = 2;
-  TELCO                   = 3;
-  POST_OFFICE             = 4;
-  TRUSTED_THIRD_PARTY     = 5;
-}
-
-/*------------------------------------------------------------
- *  CRYPTOGRAPHIC METADATA
- *-----------------------------------------------------------*/
-
-/**
- * Metadata that is partially-blinded into the credential signature.
- * Ensures signatures are bound to the issuer key and schema in use.
- *
- * JSON encoding note: bytes fields MUST be base64url without padding.
- */
-message PartialBlindMetadata {
-  bytes commitment_hash = 1;  // H(dob_commitment) (32 bytes when SHA-256)
-  string issuer_key_id  = 2;  // JOSE 'kid' for the issuing key
-  uint32 schema_version = 3;  // Credential schema version
-}
-
-/**
- * NIZK proof that the cleartext value shown to an officer equals
- * the Pedersen commitment included in the issuance request.
- *
- * JSON encoding note: bytes fields MUST be base64url without padding.
- */
-message NizkEquality {
-  bytes proof          = 1; // Scheme-specific proof bytes
-  string alg           = 2; // e.g., "SchnorrEq/v1"
-  bytes commitment     = 3; // The Pedersen commitment (32 bytes)
-  bytes challenge_hash = 4; // Domain-separated challenge hash
-}
-
-/*------------------------------------------------------------
- *  SITE JWKS (WELL-KNOWN)
- *-----------------------------------------------------------*/
-
-/**
- * Snapshot of a site's JWKS and (optionally) a signature over it.
- * Wallets fetch JWKS from: https://<origin>/.well-known/parley-site-jwks.json
- * If a detached signature is provided, verify per 'signature_alg' and 'kid'.
- *
- * JSON encoding note: bytes fields MUST be base64url without padding.
- */
-message SiteJwks {
-  bytes jwks_json       = 1; // UTF-8 JWK Set JSON; optionally gzipped (document separately)
-  bytes jwks_signature  = 2; // Detached signature over jwks_json (optional)
-  string signature_alg  = 3; // "EdDSA" (Ed25519) or "PS256"
-  string kid            = 4; // Signer key id (if applicable)
-}
-
-/*------------------------------------------------------------
- *  ISSUER AUTHORIZATION TOKEN
- *-----------------------------------------------------------*/
-
-/**
- * Token presented to an issuer-service to authorize issuance.
- * All timestamps are canonical google.protobuf.Timestamp values.
- *
- * JSON encoding note: bytes fields MUST be base64url without padding.
- */
-message IssuerAuthToken {
-  oneof credential {
-    string oauth2_jwt      = 1; // OAuth 2.0/OIDC access or ID token
-    string saml_assertion  = 2; // SAML assertion
-    string proprietary_jwt = 3; // Issuer-specific signed JWT
-  }
-
-  string issuer_id = 4;                         // Registered issuer identifier
-  google.protobuf.Timestamp issued_at  = 5;     // Token issuance time
-  google.protobuf.Timestamp expires_at = 6;     // Token expiration
-
-  // User identifier at the issuer (hashed/encrypted per issuer policy).
-  string subject_id = 7;
-
-  // Proof that user consented to issuance (wallet or app signature).
-  bytes user_consent_signature = 8; // base64url in JSON
+// Convenience envelope returned by issuer APIs.
+message SignedCredential {
+  CredMsg            msg   = 1;
+  RedJubjubSignature sig   = 2;
+  // Optional convenience copy of the public key bytes (32 bytes) for clients that want to cache.
+  bytes              issuer_vk = 3;
 }
